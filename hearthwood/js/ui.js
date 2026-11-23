@@ -941,9 +941,11 @@ export function init(app) {
     hud.classList.toggle('is-done', finished);
     hudEmoji.textContent = info.emoji || info.icon || '📐';
     hudName.textContent = info.name || 'Blueprint';
-    // finished: the card folds into one small row (CSS .is-done) that is also the "welcome home" note
-    // (no-break spaces: on a narrow phone it wraps as "All done —" / "welcome home! 🎉")
-    hudStage.textContent = finished ? 'All\u00a0done — welcome\u00a0home!\u00a0🎉' : stage;
+    // finished: the card folds into one small row (CSS .is-done) that is also the "welcome home" note. Two
+    // phrases (inline blocks): a narrow phone wraps it as "All done —" / "welcome home! 🎉", and only a very
+    // narrow one breaks inside a phrase — never cut off
+    if (finished) hudStage.replaceChildren(h('span', null, 'All done —'), ' ', h('span', null, 'welcome home!\u00a0🎉'));
+    else hudStage.textContent = stage;
     hudNum.textContent = total ? `${done}/${total}` : '';
     hudFill.style.width = `${(frac * 100).toFixed(1)}%`;
     hudNext.style.display = !finished && typeof app.blueprints?.selectNext === 'function' ? '' : 'none';

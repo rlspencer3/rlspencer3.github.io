@@ -7,7 +7,8 @@
 //   level 0, no platform → stands on the GROUND (local y = −BASE_Y)
 //   level 0, garden path → on the path stones (just above the ground)
 //   level 0, foundation / deck / floor → on the floor top (local y = 0)
-//   upper levels → on the floor top (+LIFT)
+//   upper levels → on the floor top (+LIFT); on a flat roof laid on that level (a roof terrace) → on its deck
+//   (world.validate keeps cozy & garden things off upper levels with nothing under them)
 // So a bench on the porch deck, a plant on the lawn and a chair in the parlour all sit right.
 // contextKey = that one-letter surface code (+ an optional neighbour code), so templates stay cached.
 // A few pieces also read their neighbours (def.nb → part of contextKey):
@@ -30,10 +31,14 @@ const BACK = -1 + WALL_T / 2 + 0.02;     // furniture backs stand just off a wal
 
 // ====================================================================== standing surface
 
-const SURF_Y = { g: -BASE_Y, p: -BASE_Y + 0.025, f: 0, u: 0.006 };
+const SURF_Y = { g: -BASE_Y, p: -BASE_Y + 0.025, f: 0, u: 0.006, r: 0.166 };   // r: on a flat roof's deck (0.16 thick)
 
 function surface(p, ctx) {
-  if (p.y > 0) return 'u';
+  if (p.y > 0) {
+    const f = ctx.get(K.F(p.x, p.y, p.z));
+    if (f && f.t !== 'pergola') return 'u';
+    return ctx.defOf(ctx.get(K.R(p.x, 2 * p.y, p.z)))?.roof?.kind === 'flat' ? 'r' : 'u';
+  }
   const f = ctx.get(K.F(p.x, 0, p.z));
   if (!f) return 'g';
   if (f.t === 'path') return 'p';

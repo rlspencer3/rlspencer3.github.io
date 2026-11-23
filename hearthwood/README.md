@@ -89,9 +89,10 @@ Keys do nothing while you are typing in a text box (the build name, a share code
 **Look and Draw.** In Look mode (✋) one-finger drags turn the view. In Draw mode (✏️) they place a row of pieces
 instead; pinch, twist and two-finger drags still move the camera. A small *Draw* chip under the menu button reminds
 you it is on (tap it to go back to Look). Wall-like pieces keep to their grid line while your finger drifts a little.
-A sharp turn makes a corner at the grid point nearest your finger: overshoot it a little and the extra bit is taken
-back, and the new side fills in from the corner. Drifting off sideways moves the row onto the next line. A whole
-stroke, like a stamped blueprint, a loaded build or a new meadow, is one Undo step.
+A turn makes a corner at the grid point nearest your finger, whether it is sharp or a lazy curve: overshoot it a
+little and the extra bit is taken back, and the new side fills in from the corner. Drifting off gently sideways
+moves the row onto the next line. Drawing over walls you've built gives them the new look, round the corner too. A
+whole stroke, like a stamped blueprint, a loaded build or a new meadow, is one Undo step.
 
 **Mending a gap.** Tap the middle of a missing wall segment, between two walls, and the wall goes right into the gap.
 
@@ -107,7 +108,10 @@ see inside, unless you're holding a garden piece or a path. The rail's **All / C
   or a **Loft Ladder** on the floor below. The floor above opens into a stairwell.
 - Pieces know where they belong. Choosing one that can't go this high (a tree, a foundation, a pond) takes you down to
   Floor 1. Stairs on Floor 5 take you to Floor 4, since they climb to the floor above. Cozy things take you to a floor
-  that has something to stand on and peek inside with the cutaway. Roof and gable pieces show every floor.
+  that has something to stand on and peek inside with the cutaway. Garden things go back to Floor 1 too, unless the
+  floor you're on has a deck or flat roof to plant on; tap the grass past it and they land on the ground there.
+  Roof and gable pieces show every floor.
+- Upstairs, furniture and garden things need a floor, deck or flat roof under them: nothing hangs in the air.
 - The category tabs hand you something that fits the floor you're on. Upstairs, the Floors tab gives you floor boards
   rather than a foundation.
 - If you place something on a floor the cutaway is hiding, every floor is shown again so you can see it.
@@ -152,7 +156,7 @@ scarecrow can always be painted. Windows, doors, the Gable Window and the Archwa
 
 **On the ground only (Floor 1):** Stone Foundation, Garden Path, Porch Steps, the four trees, Lily Pond, Fire Pit,
 Wishing Well, Washing Line, Chickens and Scarecrow. Furniture and garden things stand at the right height by
-themselves, whether on the grass, on a path, or on a deck or floor.
+themselves, whether on the grass, on a path, or on a deck, floor or flat roof.
 
 ## Building styles
 

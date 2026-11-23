@@ -743,7 +743,14 @@ export class Builder {
     }
     if (!fixed) {
       if (px === undefined) {
-        const hit = this.rayPlane(sx, sy, levelY(p.y) + lift * STEP);
+        let hit = this.rayPlane(sx, sy, levelY(p.y) + lift * STEP);
+        // garden things upstairs with nothing to stand on under the finger (the meadow seen past the house,
+        // not a deck or roof terrace): they go on the ground there instead of hanging in the air
+        if (def.cat === 'garden' && def.slot === 'cell' && p.y > 0 && (!hit || p.y > (def.levels?.[1] ?? MAX_LEVEL)
+          || !this.world.hasFloor(Math.floor(hit.x / CELL), p.y, Math.floor(hit.z / CELL)))) {
+          const g0 = this.rayPlane(sx, sy, levelY(0));
+          if (g0) { hit = g0; p.y = 0; }
+        }
         if (!hit) return null;
         px = hit.x; pz = hit.z;
       }
@@ -1308,11 +1315,12 @@ export class Builder {
    * A piece picked up on a floor too high for it (a tree up on Floor 3, a foundation on Floor 2, stairs on the
    * top floor): step down to the highest floor it can go on, with a gentle word. Only for a piece the player
    * chose — opening the Floors tab upstairs hands over a foundation, but they're likely after floor tiles —
-   * except garden things, which all live outdoors. Guided builds pick the floor themselves.
-   * Returns true when the floor changed.
+   * except garden things, which all live outdoors: upstairs they only stay for a deck or roof terrace there.
+   * Guided builds pick the floor themselves. Returns true when the floor changed.
    */
   _toItsFloor(def, chosen = true) {
-    const hi = def.levels?.[1] ?? MAX_LEVEL;
+    let hi = def.levels?.[1] ?? MAX_LEVEL;
+    if (def.cat === 'garden' && state.level > 0 && !this._outdoorAt(state.level)) hi = 0;
     if (state.blueprint || state.level <= hi || (!chosen && def.cat !== 'garden')) return false;
     this.setLevel(hi);
     if (state.level !== hi) return false;
@@ -1322,6 +1330,15 @@ export class Builder {
     else text = `${def.icon || '🪜'} Floor ${hi + 1} — as high as this one goes`;
     events.emit('toast', { text, kind: 'info', ms: 2600 });
     return true;
+  }
+
+  /** Has floor y somewhere outdoors to set garden things on (a deck, or a flat roof laid on that floor)? */
+  _outdoorAt(y) {
+    for (const e of this.world.entries.values()) {
+      if (e.p.y === y && e.def.id === 'deck') return true;
+      if (e.def.roof?.kind === 'flat' && 2 * e.p.y + (e.p.h || 0) === 2 * y) return true;
+    }
+    return false;
   }
 
   /**

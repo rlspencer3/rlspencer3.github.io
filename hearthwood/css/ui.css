@@ -514,6 +514,13 @@
 .hw-hud.is-done .hw-bar, .hw-hud.is-done .hw-hud-num { display: none; }
 .hw-hud.is-done .hw-hud-emoji { width: 34px; height: 34px; font-size: 21px; background: #dcebcd; }
 .hw-hud.is-done .hw-hud-tx small { color: #4f6f42; font-weight: 700; white-space: normal; line-height: 1.2; }   /* the payoff line may wrap beside the rail */
+.hw-hud.is-done .hw-hud-tx small span { display: inline-block; }   /* "All done —" / "welcome home! 🎉" wrap as phrases */
+/* a very narrow phone (320 px): the finished card gives its emoji tile's room to the words, and a long name wraps */
+@media (max-width: 340px) {
+  .hw-hud.is-done { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "tx acts"; padding-left: 12px; }
+  .hw-hud.is-done .hw-hud-emoji { display: none; }
+  .hw-hud.is-done .hw-hud-tx b { white-space: normal; line-height: 1.2; }
+}
 
 /* ---------------------------------------------------------------- menu sheet */
 

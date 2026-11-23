@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/BufferGeometryUtils.js';
 import {
-  CELL, STEP, levelY, slotKey, roofSteps, inGrid, inGridVertex, MAX_LEVEL, GRID_MIN, GRID_MAX,
+  CELL, STEP, levelY, slotKey, roofSteps, inGrid, inGridVertex, MAX_LEVEL, GRID_MIN, GRID_MAX, K,
 } from './config.js';
 import { getDef } from './catalog.js';
 import { MATERIALS } from './materials.js';
@@ -24,6 +24,10 @@ function floorReason(lo, hi, y) {
   if (y < lo) return lo === 1 ? 'Not on the ground floor' : `Only from Floor ${lo + 1} up`;
   return hi === MAX_LEVEL - 1 ? 'Not on the top floor' : `Only up to Floor ${hi + 1}`;
 }
+
+/** Cozy & garden things (furniture, rugs, flowers…) stand on something: upstairs they need a floor under them. */
+const STANDS = (def) => (def.layer === 'I' || def.layer === 'D') && (def.cat === 'interior' || def.cat === 'garden');
+const NEEDS_FLOOR = '🪵 Needs a floor or deck under it up here';
 
 /** Strip runtime fields and defaults so records stay small in saves. */
 export function compact(p) {
@@ -132,11 +136,24 @@ export class World {
       const hs = roofSteps(p);
       if (hs < 0 || hs > MAX_ROOF_HS) return { ok: false, reason: '☁️ That’s as high as roofs go' };
     }
+    if (p.y > 0 && STANDS(def) && !this.hasFloor(p.x, p.y, p.z)) return { ok: false, reason: NEEDS_FLOOR };
     if (def.canPlace) {
       const r = def.canPlace(p, this.ctxFor(p, def));
       if (r && r !== true) return { ok: false, reason: typeof r === 'string' ? r : 'Cannot place here' };
     }
     return { ok: true };
+  }
+
+  /**
+   * Is there something to stand on in cell (x, z) on level y? The ground (y = 0), a floor or deck tile (not
+   * open pergola rafters), or a flat roof laid on that level (a roof terrace).
+   */
+  hasFloor(x, y, z) {
+    if (y <= 0) return true;
+    const f = this.get(K.F(x, y, z));
+    if (f && f.t !== 'pergola') return true;
+    const r = this.get(K.R(x, 2 * y, z));
+    return !!r && getDef(r.t)?.roof?.kind === 'flat';
   }
 
   // ---------- object building ----------
@@ -347,7 +364,10 @@ export class World {
     const next = this.normalize({ ...entry.p, ...patch });
     if (!next || sameRecord(next, entry.p)) return entry;
     if (this.keyOf(next) !== key) return null;
-    return this.add(next, opts);
+    // a repaint leaves the piece where it is: one left with nothing under it (an older save, its floor erased)
+    // can still be repainted
+    const force = opts.force || this.validate(next).reason === NEEDS_FLOOR;
+    return this.add(next, { ...opts, force });
   }
 
   clear(opts = {}) {
