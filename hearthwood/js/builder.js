@@ -24,6 +24,8 @@ const SEG_SLACK = 0.25;           // …and takes the next segment once the fing
 const TURN_RATIO = 0.5;           // leaving the line steeper than ~63° is a turn (an L), shallower a hop to the next line…
 const HEAD_LEN = 0.45;            // …or heading steeper than 45° over the finger's last ~half cell (a rounded corner)
 const HOP_UNDO = 1;               // a turn within this many cells of a hop turns from the line before the hop
+const TURN_FIX = 4;               // a hop to the next line within this many cells of a corner moves the corner there…
+const TURN_MEAN = 0.35;           // …when the finger has kept (on average) this far toward that line since the turn
 const ROOF_FAR = '🏠 Tap the top of a wall to rest the roof on it';
 // build grid: soft white by day, a dim moonlit blue at night (so it doesn't glow over the scene)
 const GRID_OPACITY = 0.28;
@@ -394,6 +396,14 @@ export class Builder {
     const tr = dr.track, hx = hit.x / CELL, hz = hit.z / CELL, tl = tr[tr.length - 1];
     if (!tl || Math.abs(hx - tl[0]) + Math.abs(hz - tl[1]) > 0.02) { tr.push([hx, hz]); if (tr.length > 24) tr.shift(); }
     if (dr.hopFrom && Math.abs(along - dr.hopFrom.along) >= HOP_UNDO) dr.hopFrom = null;   // a real hop: keep it
+    const tn = dr.turn;
+    if (tn) {
+      // how far off the new line, on average, the finger has run since the turn (a weave is off to one side;
+      // over a wall the stroke just laid there, it counts as on the line: the floor seen behind it can be far off)
+      const dA = Math.abs(along - tn.at);
+      tn.at = along; tn.sum += (keep ? 0 : perp - dr.line) * dA; tn.len += dA;
+      if (Math.abs(along - tn.line) > TURN_FIX) dr.turn = null;                          // well past the corner: keep it
+    }
     const off = Math.abs(perp - dr.line);
     if (off <= LINE_ON) { dr.on = along; return; }
     if (keep || off <= LINE_SLACK) return;
@@ -427,15 +437,46 @@ export class Builder {
           dr.fill.push(x ? { a: 'x', x: i, z: oldLine } : { a: 'z', x: oldLine, z: i });
         }
       }
+      // remembered for a while: a hop to the next line soon after means the corner was on that line (see below)
+      dr.turn = { axis: dr.axis, line: oldLine, c, keys: [], at: perp, sum: 0, len: 0 };
       dr.axis = x ? 'z' : 'x';
       dr.line = c;
       dr.on = perp;
       dr.corner = oldLine;       // where the new side starts (along the new line): filled in up to the finger
       dr.go = 0;
       dr.last = null;
+    } else if (dr.turn && Math.abs(Math.round(perp) - dr.line) === 1 && tn.len > 0
+      && (tn.sum / tn.len) * (Math.round(perp) - dr.line) > TURN_MEAN) {
+      // drifting onto the next line a few cells after a corner, having kept toward it all along: the corner was
+      // on that line (a slow weave was off to one side just as the turn registered). A finger that ran on the
+      // new line before drifting off it hops as usual. Turn again there: what the stroke laid on the wrong line
+      // is taken back, the old row is trimmed or finished up to the new corner, and the new side is filled in
+      // from the corner to the finger.
+      const c2 = Math.round(perp), oa = tn.axis, c = tn.c;
+      dr.turn = null;
+      dr.hopFrom = null;
+      dr.drop.push(...tn.keys);
+      // the old row lies on the side of the new corner where the stroke has more of its segments (not dr.go:
+      // a weave wobbling back across a segment line flips that)
+      const def = getDef(state.pieceId);
+      const slot = (i) => (oa === 'x' ? { a: 'x', x: i, z: tn.line } : { a: 'z', x: tn.line, z: i });
+      const key = (i) => this.world.keyOf({ t: def.id, y: L, ...slot(i) });
+      let up = 0, down = 0;           // segments i >= c2 / i < c2 near the corner
+      for (let k = 0; k < 3; k++) { if (dr.seen.has(key(c2 + k))) up++; if (dr.seen.has(key(c2 - 1 - k))) down++; }
+      if (up !== down) {
+        const rowUp = up > down;      // the row came down to the corner (from i >= c2), else up to it
+        for (const i of rowUp ? [c2 - 1, c2 - 2] : [c2, c2 + 1]) { const k = key(i); if (dr.fresh.has(k)) dr.drop.push(k); }
+        if (rowUp ? c > c2 : c < c2) for (let i = Math.min(c, c2), n = 0; i < Math.max(c, c2) && n < 3; i++, n++) dr.fill.push(slot(i));
+      }
+      dr.line = c2;
+      dr.on = along;
+      dr.corner = tn.line;
+      dr.go = 0;
+      dr.last = null;
     } else {
       // a hop to the parallel line: still travelling the same way (remembered, in case it was a corner after all)
       dr.hopFrom = { line: dr.line, along, seg: dr.seg, go: dr.go, last: dr.last, keys: [] };
+      dr.turn = null;
       dr.line = Math.round(perp);
       dr.on = along;
       dr.corner = undefined;
@@ -668,11 +709,43 @@ export class Builder {
     return state.colors[m || def.id] || undefined;
   }
 
+  /** The grid edge nearest a point (in cells), optionally only along axis `lock`: { a, x, z, f } (f: 0..1 along it). */
+  _nearestEdge(fx, fz, lock) {
+    const cx = Math.floor(fx), cz = Math.floor(fz), u = fx - cx, v = fz - cz;
+    const cand = [
+      { a: 'x', x: cx, z: cz, d: v, f: u },
+      { a: 'x', x: cx, z: cz + 1, d: 1 - v, f: u },
+      { a: 'z', x: cx, z: cz, d: u, f: v },
+      { a: 'z', x: cx + 1, z: cz, d: 1 - u, f: v },
+    ].filter((c) => !lock || c.a === lock);
+    cand.sort((m, n) => m.d - n.d);
+    return cand[0];
+  }
+
+  /**
+   * Does a garden piece have something to stand on at world point P on level y? Its cell (a floor, deck or roof
+   * terrace), or for fences & hedges the edge nearest P (world.edgeSupported: a deck or floor beside it).
+   */
+  _gardenStands(def, P, y) {
+    if (def.slot === 'cell') return this.world.hasFloor(Math.floor(P.x / CELL), y, Math.floor(P.z / CELL));
+    const e = this._nearestEdge(P.x / CELL, P.z / CELL);
+    return this.world.edgeSupported({ t: def.id, y, a: e.a, x: e.x, z: e.z }, def);
+  }
+
+  /** The level a garden piece goes on from the current floor at a screen point: this floor if it stands there, else the ground. */
+  _gardenY(def, sx, sy) {
+    const L = state.level;
+    if (L <= 0 || L > (def.levels?.[1] ?? MAX_LEVEL)) return 0;
+    const hit = this.rayPlane(sx, sy, levelY(L));
+    return hit && this._gardenStands(def, hit, L) ? L : 0;
+  }
+
   /** Resolve the slot under a screen point for the current piece. Returns { p, def, key, valid, reason } or null. */
   resolve(sx, sy) {
     const def = getDef(state.pieceId);
     if (!def) return null;
-    const L = state.level;
+    const dr = this.drawing;
+    const L = dr && dr.y !== undefined ? dr.y : state.level;    // a garden fence stroke keeps its level
     const pick = this.pickPiece(sx, sy);     // also aims _ray at (sx, sy)
     const p = { t: def.id, y: L };
     let fixed = false;      // true: slot decided · 'roof': keep the tapped panel's height · 'guide': copy the blueprint
@@ -686,7 +759,6 @@ export class Builder {
       const c = this._gableSlot(pick);
       if (c) { p.a = c.a; p.x = c.x; p.z = c.z; p.y = c.y; fixed = true; }
     }
-    const dr = this.drawing;
     // a tap into a gap in a wall line fills that gap (not the floor or the far wall seen through it)
     if (!fixed && !dr && def.layer === 'W' && !def.autoGable) {
       const gap = this._gapSlot(def, L, pick);
@@ -745,9 +817,10 @@ export class Builder {
       if (px === undefined) {
         let hit = this.rayPlane(sx, sy, levelY(p.y) + lift * STEP);
         // garden things upstairs with nothing to stand on under the finger (the meadow seen past the house,
-        // not a deck or roof terrace): they go on the ground there instead of hanging in the air
-        if (def.cat === 'garden' && def.slot === 'cell' && p.y > 0 && (!hit || p.y > (def.levels?.[1] ?? MAX_LEVEL)
-          || !this.world.hasFloor(Math.floor(hit.x / CELL), p.y, Math.floor(hit.z / CELL)))) {
+        // not a deck or roof terrace — for fences & hedges, nothing beside the edge): they go on the ground
+        // there instead of hanging in the air (a fence stroke decided its level when it started)
+        if (def.cat === 'garden' && def.slot !== 'corner' && p.y > 0 && !(dr && dr.y !== undefined)
+          && (!hit || p.y > (def.levels?.[1] ?? MAX_LEVEL) || !this._gardenStands(def, hit, p.y))) {
           const g0 = this.rayPlane(sx, sy, levelY(0));
           if (g0) { hit = g0; p.y = 0; }
         }
@@ -768,22 +841,11 @@ export class Builder {
         if (dr.axis === 'x') Object.assign(p, { a: 'x', x: i, z: dr.line });
         else Object.assign(p, { a: 'z', x: dr.line, z: i });
       } else {
-        const fx = px / CELL, fz = pz / CELL;
-        const cx = Math.floor(fx), cz = Math.floor(fz);
-        const u = fx - cx, v = fz - cz;
-        const lock = dr?.axis;
-        const cand = [
-          { a: 'x', x: cx, z: cz, d: v },
-          { a: 'x', x: cx, z: cz + 1, d: 1 - v },
-          { a: 'z', x: cx, z: cz, d: u },
-          { a: 'z', x: cx + 1, z: cz, d: 1 - u },
-        ].filter((c) => !lock || c.a === lock);
-        cand.sort((m, n) => m.d - n.d);
-        const c = cand[0];
+        const c = this._nearestEdge(px / CELL, pz / CELL, dr?.axis);
         let ex = c.x, ez = c.z;
         if (dr?.dir) {
           // a stroke's first edge: a finger landing just short of a corner starts the row at that corner
-          const f = c.a === 'x' ? u : v;
+          const f = c.f;
           const step = dr.dir > 0 && f > 1 - SEG_SLACK ? 1 : dr.dir < 0 && f < SEG_SLACK ? -1 : 0;
           if (c.a === 'x') ex += step; else ez += step;
         }
@@ -1141,11 +1203,13 @@ export class Builder {
     // axis / line / on / seg / go / corner: a wall stroke's grid line (see _strokeLine); fresh: what it put into
     // empty slots (key → record), last: the newest of those on the current row; drop / fill: a stub to take
     // back and slots to fill in at a corner; track: the finger's recent spots (its heading); hopFrom: the line
-    // before a hop and what was laid since (a hop that turns at once was a corner); roofLevel: a roof stroke's level
+    // before a hop and what was laid since (a hop that turns at once was a corner); turn: the last corner and what
+    // was laid since (a hop soon after it moves the corner); roofLevel: a roof stroke's level; y: a garden
+    // fence / hedge stroke's level
     this.drawing = {
       seen: new Set(), axis: null, line: undefined, on: 0, seg: undefined, go: 0, corner: undefined,
-      fresh: new Map(), last: null, drop: [], fill: [], count: 0, ops: 0, touch, roofLevel: undefined,
-      track: [], hopFrom: null,
+      fresh: new Map(), last: null, drop: [], fill: [], count: 0, ops: 0, touch, roofLevel: undefined, y: undefined,
+      track: [], hopFrom: null, turn: null,
     };
     // a wall-like stroke waits for the finger's first move: its direction picks the first edge's axis (not
     // whichever edge happens to be nearest where the finger landed — on a corner that's a coin toss)
@@ -1157,7 +1221,11 @@ export class Builder {
     const d = this.drawing;
     if (!d) return;
     if (d.from) {
-      const f = d.from, y = levelY(state.level);
+      const f = d.from, def = getDef(state.pieceId);
+      // a garden fence / hedge stroke stays on one level: upstairs, a deck's (or roof terrace's) edge, else the
+      // ground — decided where the finger lands, so a row can't jump between floors halfway
+      if (def?.cat === 'garden') d.y = this._gardenY(def, f.x, f.y);
+      const y = levelY(d.y ?? state.level);
       d.from = null;
       const a = this.rayPlane(f.x, f.y, y), b = this.rayPlane(sx, sy, y);
       if (a && b && (a.x !== b.x || a.z !== b.z)) {
@@ -1180,7 +1248,7 @@ export class Builder {
           // finger is well off the old line — or past a wall it just laid — so fill in what it crossed)
           const c = d.corner, s = i >= c ? 1 : -1;
           d.corner = undefined;
-          for (let j = s > 0 ? c : c - 1, n = 0; j !== i && n < 4; j += s, n++) {
+          for (let j = s > 0 ? c : c - 1, n = 0; j !== i && n < 5; j += s, n++) {
             d.fill.push(d.axis === 'x' ? { a: 'x', x: j, z: d.line } : { a: 'z', x: d.line, z: j });
           }
           d.go = s;
@@ -1192,8 +1260,11 @@ export class Builder {
         const fill = d.fill;
         d.fill = [];
         for (const slot of fill) {
-          const q = this._strokeRec(t.def, state.level, slot);
-          if (q) this._strokePlace(d, { p: q, def: t.def, key: this.world.keyOf(q), valid: true });
+          const L = d.y ?? state.level, q = this._strokeRec(t.def, L, slot);
+          if (q) { this._strokePlace(d, { p: q, def: t.def, key: this.world.keyOf(q), valid: true }); continue; }
+          // a window or door it crossed keeps its place (and takes a restyled row's look)
+          const key = this.world.keyOf({ t: t.def.id, y: L, ...slot }), m = this.materialFor(t.def);
+          if (key && !d.seen.has(key)) this._strokeKeep(d, { def: t.def, key, existing: this.world.get(key), p: { m, c: this.colorFor(t.def, m) } });
         }
       }
       if (d.seen.has(t.key) || !t.valid) return;
@@ -1202,6 +1273,7 @@ export class Builder {
         const x = t.p.a === 'x';
         d.axis = t.p.a; d.line = x ? t.p.z : t.p.x; d.on = (x ? t.p.x : t.p.z) + 0.5; d.seg = x ? t.p.x : t.p.z;
       }
+      if (this._strokeKeep(d, t)) return;
       this._strokePlace(d, t);
     } else if (state.tool === 'erase') {
       // a stroke tidies one kind of thing on one floor: wiping across a roof must not tunnel
@@ -1232,10 +1304,32 @@ export class Builder {
       if (q.a && q.a === d.axis && (q.a === 'x' ? q.z : q.x) === d.line) {
         d.last = { key: t.key, i: q.a === 'x' ? q.x : q.z };
         if (d.hopFrom) d.hopFrom.keys.push(t.key);      // laid on a line it just hopped to (see _strokeLine)
+        if (d.turn) d.turn.keys.push(t.key);            // …or just turned onto
       }
     }
     d.count++; d.ops++;
     this._afterPlace(t, d.touch, true);
+  }
+
+  /**
+   * A stroke passing over a window, door, archway or gable keeps it: only a tap swaps one (or a stroke of
+   * windows & doors, or of that very piece). A row of walls restyled by the stroke keeps its windows and doors
+   * in the row's new look. Returns true when the slot was kept.
+   */
+  _strokeKeep(d, t) {
+    const cur = t.existing, cd = cur && getDef(cur.t);
+    if (!cd || cd.id === t.def.id || t.def.layer !== 'W' || t.def.cat === 'openings') return false;
+    if (cd.cat !== 'openings' && !cd.autoGable && cd.id !== 'wall_arch') return false;
+    d.seen.add(t.key);
+    if (cd.cat === 'openings' && t.def.matGroup === cd.matGroup && t.p.m && cd.mats?.includes(t.p.m)) {
+      const res = this.world.update(t.key, { m: t.p.m, c: t.p.c || null });
+      if (res && res.p !== cur) {
+        this.app.effects.popIn(res.obj, 0.22);
+        if (d.count % 2 === 0) events.emit('sfx', { name: 'paint' });
+        d.count++; d.ops++;
+      }
+    }
+    return true;
   }
 
   /** Take back stub segments a stroke laid past the corner it turned at (only pieces it put into empty slots). */

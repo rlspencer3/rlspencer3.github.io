@@ -28,6 +28,9 @@ function floorReason(lo, hi, y) {
 /** Cozy & garden things (furniture, rugs, flowers…) stand on something: upstairs they need a floor under them. */
 const STANDS = (def) => (def.layer === 'I' || def.layer === 'D') && (def.cat === 'interior' || def.cat === 'garden');
 const NEEDS_FLOOR = '🪵 Needs a floor or deck under it up here';
+/** Fences, hedges and railings stand in the open: upstairs they need something beside or under them (edgeSupported). */
+const OPEN_EDGE = (def) => def.layer === 'W' && def.cat !== 'walls' && def.cat !== 'openings';
+const NEEDS_EDGE = '🪵 Needs a floor or deck beside it up here';
 
 /** Strip runtime fields and defaults so records stay small in saves. */
 export function compact(p) {
@@ -137,6 +140,7 @@ export class World {
       if (hs < 0 || hs > MAX_ROOF_HS) return { ok: false, reason: '☁️ That’s as high as roofs go' };
     }
     if (p.y > 0 && STANDS(def) && !this.hasFloor(p.x, p.y, p.z)) return { ok: false, reason: NEEDS_FLOOR };
+    if (p.y > 0 && OPEN_EDGE(def) && !this.edgeSupported(p, def)) return { ok: false, reason: NEEDS_EDGE };
     if (def.canPlace) {
       const r = def.canPlace(p, this.ctxFor(p, def));
       if (r && r !== true) return { ok: false, reason: typeof r === 'string' ? r : 'Cannot place here' };
@@ -154,6 +158,21 @@ export class World {
     if (f && f.t !== 'pergola') return true;
     const r = this.get(K.R(x, 2 * y, z));
     return !!r && getDef(r.t)?.roof?.kind === 'flat';
+  }
+
+  /**
+   * Can a fence, hedge or railing stand on edge (p.a, p.x, p.z) of level p.y? Always on the ground; upstairs
+   * with a floor, deck or roof terrace on one side of the edge (a balcony's railing, a fence round a roof
+   * garden). A railing may also top a full-height wall or a beam of the floor below (a parapet).
+   */
+  edgeSupported(p, def = getDef(p.t)) {
+    if (p.y <= 0) return true;
+    const [nx, nz] = p.a === 'x' ? [p.x, p.z - 1] : [p.x - 1, p.z];
+    if (this.hasFloor(p.x, p.y, p.z) || this.hasFloor(nx, p.y, nz)) return true;
+    if (!def || def.cat === 'garden') return false;
+    if (this.get(K.B(p.a, p.x, p.y - 1, p.z))) return true;
+    const w = this.get(K.W(p.a, p.x, p.y - 1, p.z)), wd = w && getDef(w.t);
+    return !!wd && (wd.cat === 'walls' || wd.cat === 'openings') && !wd.autoGable && !wd.wallH;
   }
 
   // ---------- object building ----------
@@ -366,7 +385,8 @@ export class World {
     if (this.keyOf(next) !== key) return null;
     // a repaint leaves the piece where it is: one left with nothing under it (an older save, its floor erased)
     // can still be repainted
-    const force = opts.force || this.validate(next).reason === NEEDS_FLOOR;
+    const why = this.validate(next).reason;
+    const force = opts.force || why === NEEDS_FLOOR || why === NEEDS_EDGE;
     return this.add(next, { ...opts, force });
   }
 
