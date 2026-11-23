@@ -1078,7 +1078,7 @@ export function init(app) {
   function bpCard(b) {
     const count = b.count ?? b.pieceCount ?? (Array.isArray(b.pieces) ? b.pieces.length : null);
     const diff = difficulty(b.difficulty);
-    const diffLevel = typeof b.difficulty === 'number' ? b.difficulty : ({ easy: 1, medium: 2, hard: 3, tricky: 3 })[String(b.difficulty).toLowerCase()] || 0;
+    const diffLevel = typeof b.difficulty === 'number' ? b.difficulty : ({ easy: 1, medium: 2, hard: 3, tricky: 3, cozy: 1, handy: 2, crafty: 3 })[String(b.difficulty).toLowerCase()] || 0;
     return h('div', { class: 'hw-bp', 'data-bp': b.id },
       h('div', { class: 'hw-bp-art' }, b.thumb ? h('img', { src: b.thumb, alt: '' }) : h('span', null, b.emoji || b.icon || '🏠')),
       h('div', { class: 'hw-bp-tx' },
@@ -1095,7 +1095,10 @@ export function init(app) {
   const B_HAS = (fn) => typeof app.blueprints?.[fn] === 'function';
 
   async function startBlueprint(b, how) {
-    if (world.count) {
+    // the scenery lot a brand-new player starts with doesn't count as "their build"
+    const onlyWelcome = app.welcomeLot !== undefined && world.version === app.welcomeLot;
+    if (onlyWelcome) world.clear({ record: false });
+    else if (world.count) {
       const v = await ask({
         icon: b.emoji || '📐', title: 'Your meadow isn’t empty',
         text: how === 'guided' ? 'Clear it first so the guides have room, or build around what’s there?' : 'Clear it first, or place the house alongside your build?',
@@ -1109,7 +1112,7 @@ export function init(app) {
     try {
       if (how === 'guided') {
         app.blueprints.startGuided(b.id);
-        bp = { id: b.id, done: 0, total: b.count ?? b.pieceCount ?? 0, stage: 0, stageName: '' };
+        bp = (bp && bp.id === b.id) ? bp : { id: b.id, done: 0, total: b.count ?? b.pieceCount ?? 0, stage: 0, stageName: '' };
         renderHud();
         sfx('open');
       } else {

@@ -130,6 +130,9 @@ export class World {
     obj.rotation.set(0, ry, 0);
   }
 
+  /** Template-cache signature for a record (null when the piece can't be cached). */
+  signature(p, def = getDef(p.t), ctx = this.ctxFor(p, def)) { return this._signature(p, def, ctx); }
+
   _signature(p, def, ctx) {
     let sig = `${p.t}|${p.m || ''}|${p.c || ''}|${p.k || ''}|${p.h || 0}|${p.s || 0}`;
     if (def.contextual) {
@@ -267,7 +270,10 @@ export class World {
     if (this._batchDepth > 0) return;
     const ops = this._batch;
     this._batch = null;
-    if (ops.length) { this.undoStack.push(ops); this.redoStack.length = 0; this._trimUndo(); }
+    if (ops.length) {
+      this.undoStack.push(ops); this.redoStack.length = 0; this._trimUndo();
+      events.emit('history', { canUndo: this.canUndo(), canRedo: this.canRedo() });
+    }
   }
 
   _record(ops, opts) {
@@ -294,13 +300,30 @@ export class World {
         if (e) this._unmount(e);
       }
     }
-    // refresh contextual pieces around everything touched
-    const seen = new Set();
-    for (const op of list) {
-      const k = `${op.p.x}|${op.p.y}|${op.p.z}`;
-      if (seen.has(k)) continue;
-      seen.add(k);
-      this._refreshAround(op.p);
+    // refresh contextual pieces around everything touched (each one rebuilt once)
+    this._refreshMany(list.map((op) => op.p));
+  }
+
+  /** Rebuild, once each, the contextual pieces within 2 cells / 2 levels of any of the given records. */
+  _refreshMany(points) {
+    if (points.length <= 2) { for (const p of points) this._refreshAround(p); return; }
+    const touched = new Map();   // "x|z" -> [min y, max y]
+    for (const p of points) {
+      const k = p.x + '|' + p.z, t = touched.get(k);
+      if (!t) touched.set(k, [p.y, p.y]);
+      else { t[0] = Math.min(t[0], p.y); t[1] = Math.max(t[1], p.y); }
+    }
+    for (const e of this.entries.values()) {
+      if (!e.def.contextual) continue;
+      const q = e.p;
+      let hit = false;
+      for (let dx = -2; dx <= 2 && !hit; dx++) {
+        for (let dz = -2; dz <= 2 && !hit; dz++) {
+          const t = touched.get((q.x + dx) + '|' + (q.z + dz));
+          if (t && q.y >= t[0] - 2 && q.y <= t[1] + 2) hit = true;
+        }
+      }
+      if (hit) this._remountInPlace(e);
     }
   }
 
@@ -342,8 +365,8 @@ export class World {
   load(data, opts = {}) {
     const list = Array.isArray(data) ? data : data?.pieces;
     if (!Array.isArray(list)) return false;
-    for (const e of [...this.entries.values()]) this._unmount(e);
-    if (opts.record) this.beginBatch();
+    const ops = [];
+    for (const e of [...this.entries.values()]) { ops.push({ type: 'remove', p: e.p }); this._unmount(e); }
     let n = 0;
     for (const rec of list) {
       const p = this.normalize(rec);
@@ -351,14 +374,16 @@ export class World {
       const def = getDef(p.t);
       const key = slotKey(def, p);
       const prev = this.entries.get(key);
-      if (prev) this._unmount(prev);
+      if (prev) { this._unmount(prev); ops.push({ type: 'remove', p: prev.p }); }
       this._mount(p, def, key);
+      ops.push({ type: 'add', p });
       n++;
     }
     // contextual pieces need neighbours present: rebuild them all once
     for (const e of this.entries.values()) if (e.def.contextual) this._remountInPlace(e);
-    if (opts.record) this.endBatch();
+    if (opts.record) this._record(ops, opts);
     else { this.undoStack.length = 0; this.redoStack.length = 0; }
+    events.emit('history', { canUndo: this.canUndo(), canRedo: this.canRedo() });
     this._changed('load');
     return n;
   }

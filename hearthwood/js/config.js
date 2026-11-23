@@ -41,6 +41,7 @@ export const K = {
   P: (x, y, z) => `P|${x}|${y}|${z}`,
   R: (x, hs, z) => `R|${x}|${hs}|${z}`,
   I: (x, y, z) => `I|${x}|${y}|${z}`,
+  D: (x, y, z) => `D|${x}|${y}|${z}`,   // rugs & decals: lie under furniture in the same cell
 };
 
 export function slotKey(def, p) {
@@ -51,6 +52,7 @@ export function slotKey(def, p) {
     case 'P': return K.P(p.x, p.y, p.z);
     case 'R': return K.R(p.x, roofSteps(p), p.z);
     case 'I': return K.I(p.x, p.y, p.z);
+    case 'D': return K.D(p.x, p.y, p.z);
   }
   throw new Error('unknown layer ' + def.layer);
 }

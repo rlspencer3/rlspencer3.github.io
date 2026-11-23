@@ -54,6 +54,7 @@ const context = await browser.newContext(ctxOpts);
 const page = await context.newPage();
 const problems = [];
 page.on('console', (m) => {
+  if (/GPU stall due to ReadPixels/.test(m.text())) return;   // caused by taking the screenshot itself
   if (m.type() === 'error' || m.type() === 'warning') problems.push(`[console.${m.type()}] ${m.text()}`);
   else if (args.verbose) console.log(`[console.${m.type()}] ${m.text()}`);
 });

@@ -320,8 +320,10 @@ registerPiece({
     const open = { px: !n(1, 0), nx: !n(-1, 0), pz: !n(0, 1), nz: !n(0, -1) };
     const T = p.y > 0 ? LIFT : 0;
     const BT = 0.04, pitch = 2 / DECK_BOARDS, bw = pitch - 0.02;
-    const bgeo = boxGeo(2, BT, bw);
-    for (let i = 0; i < DECK_BOARDS; i++) add(g, bgeo, bm, 0, T - BT / 2, -1 + pitch * (i + 0.5));
+    for (let i = 0; i < DECK_BOARDS; i++) {          // planar UVs: each board shows its own grain
+      const zc = -1 + pitch * (i + 0.5);
+      pb(g, bm, -1, 1, T - BT, T, zc - bw / 2, zc + bw / 2);
+    }
     const jb = T - BT;                                  // underside of boards
     const RH = p.y === 0 ? 0.12 : 0.18;                 // rim height
     // dark underlay so the board gaps read as shadow lines instead of flickering see-through slits
@@ -493,7 +495,7 @@ const STEP_W = 0.78;                       // half width
 
 registerPiece({
   id: 'steps', name: 'Porch Steps', cat: 'base', slot: 'cell', layer: 'F', rot: 'four',
-  mats: ['stoneBlock', 'deck', 'wood'], matGroup: 'steps', levels: [0, 0],
+  mats: ['stoneBlock', 'deck', 'wood'], matGroup: 'steps', levels: [0, 0], thumb: { r: 2 },
   icon: '🪜', sound: 'stone', desc: 'A welcoming stoop up to the front door. Rotate so it climbs toward the house.',
   build(p) {
     const g = new THREE.Group();
@@ -674,7 +676,7 @@ const ST_N = 10, ST_RISE = LEVEL_H / ST_N, ST_RUN = 2 / ST_N, ST_W = 0.76;
 
 registerPiece({
   id: 'stairs', name: 'Stairs', cat: 'frame', slot: 'cell', layer: 'I', rot: 'four',
-  mats: ['wood', 'timber', 'floorOak', 'stoneBlock'], matGroup: 'stairs', levels: [0, MAX_LEVEL - 1],
+  mats: ['wood', 'timber', 'floorOak', 'stoneBlock'], matGroup: 'stairs', levels: [0, MAX_LEVEL - 1], thumb: { r: 2 },
   icon: '🪜', sound: 'wood', desc: 'A straight staircase up one storey. The floor above opens into a stairwell.',
   cacheExtra: lvl,
   build(p) {

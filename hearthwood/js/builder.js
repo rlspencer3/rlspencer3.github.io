@@ -190,6 +190,21 @@ export class Builder {
     if (kind === 'flat' || kind === 'cap') return 0;
     const [dx, dz] = DIRS[r];
     const [ex, ez] = DIRS[(r + 1) & 3];
+    if (kind === 'inner') {
+      // a valley sits level with the slopes beside it, or stacks diagonally on a valley below it
+      let best = -1;
+      for (let hs = base; hs <= base + 12; hs++) {
+        const d = this.world.get(K.R(x - dx - ex, hs, z - dz - ez));
+        const dd = d && getDef(d.t);
+        if (dd?.roof?.kind === 'inner' && d.r === r) best = Math.max(best, hs + (dd.roof.rise ?? 1));
+        for (const [cx, cz, rr] of [[x - dx, z - dz, (r + 1) & 3], [x - ex, z - ez, r]]) {
+          const q = this.world.get(K.R(cx, hs, cz));
+          const qd = q && getDef(q.t);
+          if (qd?.roof && (qd.roof.kind || 'slope') === 'slope' && q.r === rr) best = Math.max(best, hs);
+        }
+      }
+      return best < 0 ? 0 : best - base;
+    }
     const probes = kind === 'slope'
       ? [[x - dx, z - dz]]
       : [[x - dx - ex, z - dz - ez], [x - dx, z - dz], [x - ex, z - ez]];

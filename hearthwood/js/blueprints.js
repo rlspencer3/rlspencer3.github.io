@@ -660,7 +660,7 @@ export function init(app) {
   function ghostGeo(p, def) {
     const ctx = ghostCtx(p, def);
     let sig = null;
-    try { sig = world._signature(p, def, ctx); } catch { sig = null; }
+    try { sig = world.signature(p, def, ctx); } catch { sig = null; }
     const k = sig ? 'g|' + sig : null;
     if (k && ghostGeos.has(k)) return ghostGeos.get(k);
     let raw;
@@ -904,6 +904,7 @@ export function init(app) {
       at('boulders', 8, 0), at('bush', 8, 5), at('flowers', 7, 6),
     ];
     for (const p of pieces) world.add(p, { record: false });
+    app.welcomeLot = world.version;   // lets the UI tell "only the welcome scenery" from a real build
     rig.setView(view({ t: [0, 1, 5], th: 0.42, ph: 1.08, r: 30 }), true);
     return pieces.length;
   }
@@ -919,7 +920,7 @@ export function init(app) {
   function thumbPiece(job, it) {
     const ctx = { world, def: it.def, p: it.p, get: (k) => job.map.get(k), defOf: (r) => (r ? getDef(r.t) : null) };
     let sig = null;
-    try { sig = world._signature(it.p, it.def, ctx); } catch { sig = null; }
+    try { sig = world.signature(it.p, it.def, ctx); } catch { sig = null; }
     let tpl = sig ? job.tpls.get(sig) : null;
     if (!tpl) {
       tpl = sig ? world.templates?.get(sig) : null;     // the world's own template (read only)

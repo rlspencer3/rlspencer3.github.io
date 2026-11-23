@@ -972,8 +972,8 @@ decor({
 
 // ---------------------------------------------------------------- rugs
 decor({
-  id: 'rug', name: 'Rug', cat: 'interior', icon: '🟥', sound: 'soft', paintAlways: true,
-  desc: 'A soft woven rug with a border and fringed ends.',
+  id: 'rug', name: 'Rug', cat: 'interior', icon: '🟥', sound: 'soft', paintAlways: true, layer: 'D',
+  desc: 'A soft woven rug with a border and fringed ends. Furniture can stand on it.',
   build(g, p) {
     const c = p.c || '#8e3b32';
     const base = fab(c), edge = fab(COL.cream), dark = fab(tint(c, -0.35));
@@ -998,8 +998,8 @@ decor({
 });
 
 decor({
-  id: 'rug_round', name: 'Braided Rug', cat: 'interior', icon: '🟠', sound: 'soft', paintAlways: true,
-  desc: 'An oval rag-braided rug in cosy rings.',
+  id: 'rug_round', name: 'Braided Rug', cat: 'interior', icon: '🟠', sound: 'soft', paintAlways: true, layer: 'D',
+  desc: 'An oval rag-braided rug in cosy rings. Furniture can stand on it.',
   build(g, p) {
     const c = p.c || COL.denim;
     const ms = [fab(c), fab(COL.cream), fab(tint(c, -0.3)), fab(tint(c, 0.25))];

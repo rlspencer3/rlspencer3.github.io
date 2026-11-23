@@ -66,6 +66,7 @@ function renderOne(world, id, rec) {
   const p = world.normalize({ t: id, x: 500, y: 0, z: 500, a: 'x', ...(def.thumb || {}), ...rec });
   if (!p) return '';
   const obj = world.buildLocal(p);
+  obj.rotation.y = (p.r || 0) * Math.PI / 2;   // def.thumb.r turns a piece to face the camera
   scene.add(obj);
   _box.setFromObject(obj);
   _box.getSize(_size);

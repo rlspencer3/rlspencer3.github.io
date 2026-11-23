@@ -23,7 +23,7 @@
 
 import * as THREE from 'three';
 import { registerPiece } from '../catalog.js';
-import { STEP, ROOF_T, EAVE, BASE_Y, DIRS, K, inGrid } from '../config.js';
+import { STEP, ROOF_T, EAVE, BASE_Y, DIRS, K } from '../config.js';
 import { mat } from '../materials.js';
 import { boxGeo, cylGeo, sphereGeo, coneGeo, add } from '../geom.js';
 
@@ -328,16 +328,6 @@ const isBoarded = (s) => s === 'e' || s === 'v' || s === 't';
 const isJoined = (s) => s === 'j' || s === 'i' || s === 'n' || s === '1' || s === '2';
 const isRidge = (s) => s === '1' || s === '2';
 const groundFlag = (p) => (p.y === 0 ? 'g' : 'u');
-// Palette thumbnails render buildLocal() off the lot (x = 500) WITHOUT the record's rotation, looking
-// from +X+Z — i.e. at the underside of a panel. Pieces built off-lot are therefore turned 180° so the
-// roofing faces the thumbnail camera (keyed separately so placed pieces never share that template).
-const thumbMode = (p) => !inGrid(p.x, p.z);
-const thumbKey = (p) => (thumbMode(p) ? 'T' : '');
-function forThumb(p, g) {
-  if (thumbMode(p)) g.rotation.y = Math.PI;
-  return g;
-}
-
 // ===================================================================== sloped panels
 
 /**
@@ -737,11 +727,11 @@ function panel(id, name, kind, rise, extra = {}) {
   registerPiece({
     id, name, cat: 'roof', slot: 'cell', layer: 'R', mats: ROOF_MATS, matGroup: 'roof', paint: true,
     roof: { rise, kind }, contextual: true, icon: PANEL_ICONS[kind] || '🏠', sound: 'wood',
-    thumb: { y: 1 }, showcase: { r: 2 },
-    contextKey: (p, ctx) => panelKey(p, ctx, kind, rise) + thumbKey(p),
+    thumb: { y: 1, r: 2 }, showcase: { r: 2 },
+    contextKey: (p, ctx) => panelKey(p, ctx, kind, rise),
     build(p, ctx) {
       const { states, thin } = sideStates(p, ctx, kind, rise);
-      return forThumb(p, buildPanel(p, kind, rise, states, hole, { big, thin, platform: baseFlag(p, ctx) === 'f' }));
+      return buildPanel(p, kind, rise, states, hole, { big, thin, platform: baseFlag(p, ctx) === 'f' });
     },
     ...extra,
   });

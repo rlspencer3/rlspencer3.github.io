@@ -88,6 +88,7 @@ One piece per slot key. Keys are built by `K.*` in config.js.
 | `P` | corner | `P|x|y|z` | posts / columns |
 | `R` | cell | `R|x|hs|z` with `hs = 2*y + h` | roof panels (one per cell per half-step) |
 | `I` | cell | `I|x|y|z` | furniture, garden items, stairs, chimney |
+| `D` | cell | `D|x|y|z` | rugs & floor decals (lie under the `I` item in the same cell) |
 
 Placing into an occupied slot **replaces** the occupant (tap a wall with the window tool → window).
 
@@ -193,6 +194,7 @@ Event bus `events.emit(type, detail)` / `events.on(type, fn)`:
 * `sfx` {name, flavor} — names: place, replace, remove, paint, rotate, click, undo, level, error, success, open, close, camera, blueprint-step, blueprint-done
 * `toast` {text, kind?: 'info'|'warn'|'success', ms?}
 * `blueprint-progress` {id, done, total, stage, stageName}
+* `history` {canUndo, canRedo} — after a batch (blueprint stamp, draw stroke) or a load changes the undo stacks
 * `ready` (app)
 
 ## App object (window.__hw, passed to every module's `init(app)`)
@@ -202,14 +204,20 @@ params (URLSearchParams), errors, thumbnail(id, rec) → Promise<dataURL>, snaps
 loadBuild(data), newBuild(), env, audio, ui, blueprints, fps`.
 
 Feature modules export `init(app)` returning an object (optionally with `update(dt)`, called each frame):
-* `env.js` → `{ update(dt) }` — owns lights/sky/ground; removes nothing of the world.
+* `env.js` → `{ update(dt), heightAt(x, z), sunDir, night }` — owns lights/sky/ground; removes nothing of the world.
+  Shadow maps are cached (`renderer.shadowMap.autoUpdate = false`): env re-renders them on world changes, effect
+  tweens, light movement and every 12 frames. Anything else that animates shadow-casting objects should set
+  `renderer.shadowMap.needsUpdate = true`.
 * `audio.js` → `{ update(dt) }` — listens to `sfx` events and state.
 * `blueprints.js` → `{ list(), get(id), startGuided(id), stop(), stamp(id, {animate, record}), welcome(), update(dt), active() }`
-* `ui.js` → `{ update(dt) }`.
+* `ui.js` → `{ update(dt), toast, open(page), close, showWelcome, ask }`.
+* `app.welcomeLot` — `world.version` right after the first-visit scenery lot was placed (unchanged version ⇒ only scenery).
 
 World API: `add(rec, {record}) → entry|null`, `remove(key)`, `update(key, patch)`, `get(key)`, `entry(key)`, `keyOf(rec)`,
 `normalize(rec)`, `validate(rec)`, `clear()`, `load(data)`, `serialize()`, `undo()`, `redo()`, `canUndo()`, `canRedo()`,
-`beginBatch()/endBatch()`, `buildPlaced(rec)`, `setView(level, seeAll)`, `entries` (Map key → {key, p, def, obj, level}), `count`.
+`beginBatch()/endBatch()`, `buildPlaced(rec)`, `signature(rec)` (template-cache key), `setView(level, seeAll)`,
+`entries` (Map key → {key, p, def, obj, level}), `count`, `version` (bumps on every change).
+`load(data, {record: true})` is a single undo step.
 
 Builder API: `rotate(dir)`, `raise(d)`, `setLevel(n)`, `selectPiece(id)`, `undo()`, `redo()`, `place(rec, opts)`,
 `resolve(sx, sy)`, `hideGhost()`.

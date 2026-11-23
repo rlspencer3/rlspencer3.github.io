@@ -14,7 +14,7 @@ export const CATEGORIES = [
 ];
 
 const SLOT_LAYERS = {
-  cell: ['F', 'R', 'I'],
+  cell: ['F', 'R', 'I', 'D'],
   edge: ['W', 'B'],
   corner: ['P'],
 };
