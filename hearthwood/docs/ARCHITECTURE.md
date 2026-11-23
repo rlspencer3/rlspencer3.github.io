@@ -255,13 +255,30 @@ Feature modules export `init(app)` returning an object (optionally with `update(
   their pop-in (no draw calls; `entry.obj.visible` stays the level cutaway's). In guided mode `selectNext` turns the
   camera to face a piece that is on the far side of the house.
 * `ui.js` → `{ update(dt), toast, open(page), close, showWelcome, ask }`.
+  * Photo mode sets `state.seeAll = true` on entry and restores the saved `{level, seeAll}` on exit. It changes
+    `seeAll` without moving the camera: it keeps `rig.goal.target.y` across the change, which the builder's floor view
+    (`_applyLevel`) would otherwise reset to the floor height; the builder's V key does the same while in photo
+    mode. Its '✂️ Peek inside' / '🏠 Whole house' pill toggles the cutaway (like V) and only shows when the cutaway
+    would hide something (anything above the current floor).
+  * The tool rail (`.hw-rail > .hw-rail-in > .hw-rail-group` × 2) is a CSS size container (`hw-rail`) spanning from
+    under the top bar to the tray, its groups at the bottom. Container queries shorten the tools when room is short,
+    then put the second group beside the first (not on landscape phones, where the tray sits beside the rail), then
+    hide the labels. The camera's right inset
+    (`rig.setInsets`) comes from the tools group's left edge, not the rail box. Browsers without container queries get
+    the one-column rail, which can still run up past the top bar on very short screens.
+  * Material chips (paint strip, build tray) carry `data-key`. A tapped chip's offset is remembered, and the
+    re-rendered strip puts it back there, then scrolls the least it takes to show it whole (anchors older than
+    600 ms are dropped).
+  * Up to 300 px wide, the floor pill's arrows are 34 px wide, with tap areas reaching 6 px over the 'Floor N' label.
 * `app.welcomeLot` — `world.version` right after the first-visit scenery lot was placed (unchanged version ⇒ only scenery).
 
 World API: `new World(scene, { batch: false | batcherOptions })` (one-argument form still works; batching is on by default).
 `add(rec, {record}) → entry|null`, `remove(key)`, `update(key, patch)`, `get(key)`, `entry(key)`, `keyOf(rec)`,
 `normalize(rec)` (null for anything that isn't a record of a known type), `validate(rec)`, `hasFloor(x, y, z)` (something
 to stand on in that cell on level y: the ground at y = 0, a floor / deck tile — not pergola rafters — or a flat roof laid
-on that level), `clear()`, `load(data)`,
+on that level), `edgeSupported(p, def?)` (can a fence, hedge or railing stand on that edge: always at y = 0; upstairs
+when `hasFloor` holds for either cell beside the edge; a railing also on a full-height wall / opening — not a gable or
+half wall — or a beam on the same edge one level down), `clear()`, `load(data)`,
 `serialize()`, `undo()`, `redo()`, `discardLast()` (revert the last undo step without making it a redo — for gestures
 that turned out to be accidental), `canUndo()`, `canRedo()`, `beginBatch()/endBatch()` (endBatch → true when it pushed an undo step), `buildPlaced(rec)`,
 `buildLocal(rec)`, `signature(rec)` (template-cache key), `setView(level, seeAll)`, `pick(raycaster)`,
@@ -271,9 +288,10 @@ that turned out to be accidental), `canUndo()`, `canRedo()`, `beginBatch()/endBa
 top floor), `count`, `version` (bumps on every change). `validate` reasons are player-facing and use Floor wording
 ('Ground floor only', 'Only on Floor N', 'Not on the ground floor', 'Only from Floor N up', 'Not on the top floor',
 'Only up to Floor N', '☁️ That’s as high as roofs go', 'Outside the lot', and for cozy & garden things (I / D layer) on
-an upper level with nothing under them: '🪵 Needs a floor or deck under it up here'). `load` and undo / redo don't
-validate, and `update` (a repaint in the same slot) skips that floor rule, so older saves keep everything and stay
-paintable.
+an upper level with nothing under them: '🪵 Needs a floor or deck under it up here'; for W-layer pieces outside
+walls / openings — fences, hedges, railings — on an upper level that fail `edgeSupported`: '🪵 Needs a floor or deck
+beside it up here'). `load` and undo / redo don't validate, and `update` (a repaint in the same slot) skips those two
+rules, so older saves keep everything and stay paintable.
 `load(data, {record: true})` is a single undo step; a non-recorded load resets both undo stacks and any open batch.
 Unknown / malformed records in `load` data are skipped.
 
@@ -355,8 +373,10 @@ beam or post the roof rests on top of THAT piece (level = its level + 1, up to M
 the cell where the finger's line crosses the wall-top height; more than a cell away from the piece (a tap low on a
 wall face) is invalid: red ghost, error sound and '🏠 Tap the top of a wall to rest the roof on it'. Gables: an open
 triangle visible in front of whatever the ray hits wins (looking through one open end never picks the far end).
-Garden pieces on an upper floor whose cell under the finger has nothing to stand on (`world.hasFloor`), or that can't go
-that high, land on the ground (level 0) where the finger's ray meets it — the meadow seen past the house.
+Garden pieces on an upper floor with nothing to stand on under the finger, or that can't go that high, land on the
+ground (level 0) where the finger's ray meets it — the meadow seen past the house. For cell pieces that is the cell
+under the finger (`world.hasFloor`); for fences and hedges the grid edge nearest the finger (`world.edgeSupported`).
+A railing (not a garden piece) gets no fallback: unsupported upstairs, it shows a red ghost and the reason.
 * Draw strokes: wall-like (edge) strokes take their first edge's axis from the finger's first move, then keep to that
   grid line while the finger stays within 0.8 cell of it; leaving it steeply turns a corner, leaving it shallowly hops
   to the parallel line. Steep means either along-travel since the finger was last on the line < 0.5 × off-distance, or
@@ -367,11 +387,24 @@ that high, land on the ground (level 0) where the finger's ray meets it — the 
   is taken back (an overshooting thumb leaves no stub), a row that stopped short is finished up to it, and the new
   side is filled in from the corner to the finger (the turn registers ~0.8 cell late, or later while the finger is
   over a wall the stroke just laid). The row's direction (`go`) follows its segments, so a thumb wobbling back at a
-  corner can't flip it. Fill-ins only go into empty slots, or over the same piece in another look (a restyling stroke
-  repaints the corner it crossed; never a window, door, gable or other piece); take-backs only remove what the stroke
-  put into an empty slot. Walls on other parallel lines don't hijack the stroke. A stroke is one undo step
-  (`beginBatch` / `endBatch`); an erase stroke only removes one kind of thing on one floor (roof panels count as one
-  kind).
+  corner can't flip it.
+  Corner correction (`drawing.turn`): for up to 4 cells after a turn the stroke keeps the finger's mean offset from
+  the new line, weighted by distance travelled (samples over a wall the stroke just laid count as on the line). A hop
+  to the adjacent parallel line within that window, when the mean leaned ≥ 0.35 cell toward it, re-does the turn on
+  that line: what the stroke laid on the wrong line is taken back, the old row is trimmed or finished up to the new
+  corner (its side is decided by the stroke's segments within 3 cells of the corner, not `go`, which a weave can
+  flip), and the new side is filled in from the corner. A finger that ran on the new line before drifting off hops as
+  usual.
+  Fill-ins only go into empty slots, or over the same piece in another look (a restyling stroke repaints the corner it
+  crossed); take-backs only remove what the stroke put into an empty slot. A build stroke of a W piece that isn't an
+  opening never replaces a window, door, archway or gable it passes over, at the finger or in a fill-in
+  (`_strokeKeep`): an opening in the stroke piece's `matGroup` takes the stroke's material (when in its `mats`) and
+  colour, accent kept, through `world.update` in the stroke's undo step; archways and gables are left as they are.
+  Only a tap, a stroke of openings, or a stroke of that same piece replaces them. Walls on other parallel lines don't
+  hijack the stroke. A garden fence / hedge stroke fixes its level where the finger lands (`drawing.y`: the active
+  floor when the edge nearest that spot passes `edgeSupported`, else the ground), takes its first edge's axis on that
+  plane and skips unsupported slots. A stroke is one undo step (`beginBatch` / `endBatch`); an erase stroke only
+  removes one kind of thing on one floor (roof panels count as one kind).
 * Gaps: a tap (not a stroke) with a W-layer piece whose ray crosses the opening of an empty edge on the active floor
   whose two ends both meet pieces of the same family (walls & openings together, else one fence / hedge / railing
   kind) — before anything else it hits — fills that edge, so tapping through a missing wall segment doesn't land on

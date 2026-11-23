@@ -17,7 +17,10 @@ Play it at **https://rlspencer3.github.io/hearthwood/** (or run it locally, see 
 ## The screen
 
 - **Top bar:** Menu, the piece counter, the floor control (▼ Floor 1 ▲) and Undo / Redo.
-- **Rail (right):** the tools Build, Erase, Paint and Pick, then Look / Draw and All / Cutaway.
+- **Rail (right):** the tools Build, Erase, Paint and Pick, then Look / Draw and All / Cutaway. It always stays below
+  the top bar. When room is short (small phones, or the taller Paint tray) its buttons get a little shorter, then
+  Look / Draw and All / Cutaway move beside the tools (not on landscape phones), and on very short screens the buttons
+  show icons only.
 - **Tray (bottom):** the options for the piece in hand (material, colour, accent, roof height, turn), the category tabs
   and the piece cards. The little handle above it hides or shows the pieces. On landscape phones the tabs fold into one
   category button beside the cards.
@@ -83,16 +86,19 @@ Keys do nothing while you are typing in a text box (the build name, a share code
 |---|---|
 | **Build** | Places the piece in hand. A piece placed where another one is replaces it: tap a wall with a window and the window swaps in (windows and doors also swap walls on other floors you can see). The tray shows the piece's options: its material, its **Colour** (paintable materials only; *Natural* goes back to the plain look), an **Accent** colour for doors, frames and shutters, **Height** ▲▼ for roof pieces (*Auto*, or nudged up to 8 half-steps either way) and **Turn** (or **Flip** for pieces on grid lines). |
 | **Erase** | Tap a piece to tidy it away. In Draw mode, drag across many. One stroke only clears one kind of thing on one floor, so wiping across a roof won't eat the walls underneath. |
-| **Paint** | Pick a material (the Walls / Roof / Floors / Trim buttons jump to each group), a colour (24 to choose from), or both, then tap pieces. *Keep* leaves that part as it is. **Main / Accent** switches to painting door, frame and shutter colours. A material a piece can't use is skipped, and colour only shows on paintable materials. |
+| **Paint** | Pick a material (the Walls / Roof / Floors / Trim buttons jump to each group), a colour (24 to choose from), or both, then tap pieces. *Keep* leaves that part as it is. **Main / Accent** switches to painting door, frame and shutter colours. A material a piece can't use is skipped, and colour only shows on paintable materials. A material you pick stays where you tapped it, the strip scrolls just enough to show it whole, and its group's button lights up. On very short portrait screens the hint row hides and **Done** sits beside Main / Accent. |
 | **Pick** | Tap a placed piece to copy it: the piece, its material, colours, accent and facing, and its floor (except for roof pieces). Then you're back to Build with it in hand. |
 
 **Look and Draw.** In Look mode (✋) one-finger drags turn the view. In Draw mode (✏️) they place a row of pieces
 instead; pinch, twist and two-finger drags still move the camera. A small *Draw* chip under the menu button reminds
 you it is on (tap it to go back to Look). Wall-like pieces keep to their grid line while your finger drifts a little.
 A turn makes a corner at the grid point nearest your finger, whether it is sharp or a lazy curve: overshoot it a
-little and the extra bit is taken back, and the new side fills in from the corner. Drifting off gently sideways
-moves the row onto the next line. Drawing over walls you've built gives them the new look, round the corner too. A
-whole stroke, like a stamped blueprint, a loaded build or a new meadow, is one Undo step.
+little and the extra bit is taken back, and the new side fills in from the corner. If a wobbly thumb puts the
+corner one line off, the new side moves over to the right line once you settle onto it within a few cells. Drifting
+off gently sideways moves the row onto the next line. Drawing over walls you've built gives them the new look, round
+the corner too. Windows, doors, archways and gables in the way stay put, and the windows and doors take the row's
+new wall look (their accent colour stays). To turn one back into a wall, tap it with a Wall. A whole stroke, like a
+stamped blueprint, a loaded build or a new meadow, is one Undo step.
 
 **Mending a gap.** Tap the middle of a missing wall segment, between two walls, and the wall goes right into the gap.
 
@@ -111,7 +117,10 @@ see inside, unless you're holding a garden piece or a path. The rail's **All / C
   that has something to stand on and peek inside with the cutaway. Garden things go back to Floor 1 too, unless the
   floor you're on has a deck or flat roof to plant on; tap the grass past it and they land on the ground there.
   Roof and gable pieces show every floor.
-- Upstairs, furniture and garden things need a floor, deck or flat roof under them: nothing hangs in the air.
+- Upstairs, furniture and garden things need a floor, deck or flat roof under them, and fences, hedges and railings
+  need one beside them (a railing can also stand on top of a wall or a beam): nothing hangs in the air. From upstairs,
+  a fence or hedge tapped or drawn on the grass lands on the ground. A fence stroke stays on the floor where it
+  starts: along a deck's edge upstairs, otherwise on the ground.
 - The category tabs hand you something that fits the floor you're on. Upstairs, the Floors tab gives you floor boards
   rather than a foundation.
 - If you place something on a floor the cutaway is hiding, every floor is shown again so you can see it.
@@ -225,9 +234,11 @@ Open **Menu → Blueprints** and pick a house.
   use your phone's Share sheet. To open a friend's home, paste their code (it can be inside a chat message) and tap
   **Load this build**. It replaces your build as one Undo step, and the camera frames the new house. Codes carry the
   pieces only, not the name or the camera. A code with no home in it just gets a friendly note.
-- **Photo mode:** Menu → Photo mode hides the buttons. Frame your shot with the usual gestures and tap the shutter.
-  On a phone the Share sheet opens where the browser supports it; otherwise a PNG downloads. Tap ✕ or press Esc to
-  leave.
+- **Photo mode:** Menu → Photo mode hides the buttons and shows the whole house, every floor with its roof on, even
+  if you were looking at a cutaway. Frame your shot with the usual gestures and tap the shutter. When the cutaway
+  would hide something, **✂️ Peek inside** at the top left (or V) shows the rooms for your photo, and **🏠 Whole
+  house** puts the roof back. On a phone the Share sheet opens where the browser supports it; otherwise a PNG
+  downloads. Tap ✕ or press Esc to leave: your floor and cutaway come back as they were.
 - Saves live in this browser's storage on this device. Clearing the site's data removes them, so use a share code to
   move a home to another device. If storage is full or blocked, the game tells you once.
 

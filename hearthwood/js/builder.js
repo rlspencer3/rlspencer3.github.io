@@ -1514,7 +1514,13 @@ export class Builder {
     else if (k === 'pagedown' || k === '-' || k === '_') this.setLevel(state.level - 1);
     else if (k === ']') this.raise(1);
     else if (k === '[') this.raise(-1);
-    else if (k === 'v') state.set({ seeAll: !state.seeAll });
+    else if (k === 'v') {
+      // in photo mode the shot stays framed (like the photo bar's Peek inside / Whole house): the floor view
+      // (_applyLevel) would re-aim the camera at the floor's height
+      const t = this.rig.goal?.target, y = t?.y;
+      state.set({ seeAll: !state.seeAll });
+      if (state.photoMode && t && Number.isFinite(y)) t.y = y;
+    }
     else if (k === 'escape') { state.set({ tool: 'build' }); this.hideGhost(); }
     else if (k === 'q') this.rig.rotateBy(-Math.PI / 8);
     else if (k === 'w' && e.shiftKey) this.rig.rotateBy(Math.PI / 8);
