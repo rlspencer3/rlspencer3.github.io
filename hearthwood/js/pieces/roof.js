@@ -275,7 +275,12 @@ function sideStates(p, ctx, kind, rise) {
       if (!q) continue;
       const qd = ctx.defOf(q);
       const qk = roofKind(qd);
-      if (!qk || qk === 'cap') continue;
+      if (!qk) continue;
+      if (qk === 'cap') {
+        // a cap (pyramid) sitting right on our high edge closes it: no top board, no exposed side
+        if (mine === 'H' && Math.abs(hs + d - ha) < EPS && Math.abs(hs + d - hb) < EPS) st = 'j';
+        continue;
+      }
       const qr = q.r || 0, qrise = qd.roof.rise ?? 1;
       const G = (u, v) => field(qk, qrise, u, v);
       const la = toLocal(qr, wa[0] - 2 * wn[0], wa[1] - 2 * wn[1]);
@@ -502,7 +507,7 @@ function buildPanel(p, kind, rise, states, hole, opts = {}) {
       else valleyStrip(g, M, st, A, B, facets, Tv);
     }
   } else if (pyr) {
-    for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) hipCap(g, M, st, p, [sx * x1, sz * z1], [0, 0], facets, H, Tv);
+    for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) hipCap(g, M, st, p, [sx > 0 ? x1 : x0, sz > 0 ? z1 : z0], [0, 0], facets, H, Tv);
   }
 
   // ---- standing seams (metal)
@@ -827,14 +832,21 @@ registerPiece({
 
 // ---------------------------------------------------------------- pyramid cap
 
+/** 'e' (eave) on open sides, 'j' where a neighbouring panel's edge meets the cap's base. */
+function pyramidStates(p, ctx) {
+  return sideStates(p, ctx, 'flat', 0).states.replace(/[^o]/g, 'j').replace(/o/g, 'e');
+}
+
 registerPiece({
   id: 'roof_pyramid', name: 'Pyramid Cap', cat: 'roof', slot: 'cell', layer: 'R', rot: 'none',
   mats: ROOF_MATS, matGroup: 'roof', paint: true, roof: { rise: 1, kind: 'cap' },
-  icon: '🔼', sound: 'wood', thumb: { y: 1 },
+  icon: '🔼', sound: 'wood', thumb: { y: 1 }, contextual: true,
   cacheExtra: groundFlag,
   desc: 'A pointed four-sided cap with a finial — for gazebos, towers and garden sheds.',
-  build(p) {
-    const g = buildPanel(p, 'pyramid', 1, 'eeee', null);
+  // capping a hip roof: sides resting on a neighbour panel's top edge join it (no eave, no fascia)
+  contextKey: (p, ctx) => pyramidStates(p, ctx),
+  build(p, ctx) {
+    const g = buildPanel(p, 'pyramid', 1, pyramidStates(p, ctx), null);
     const st = styleOf(p.m);
     const R = STEP, Tv = st.t * Math.hypot(1, R);
     const top = R + Tv;

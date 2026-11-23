@@ -14,7 +14,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/BufferGeometryUtils.js';
 import { registerPiece } from '../catalog.js';
-import { LEVEL_H, STEP, BASE_Y, WALL_T, K } from '../config.js';
+import { LEVEL_H, STEP, BASE_Y, WALL_T, K, inGridVertex } from '../config.js';
 import { mat } from '../materials.js';
 import { boxGeo, cylGeo, sphereGeo, coneGeo, prismGeo, openingOutline, cached, add } from '../geom.js';
 
@@ -34,6 +34,7 @@ const LOG_SEG = 10;
 const CHINK_D = 0.13;         // chinking slab depth (shows between round logs)
 const EPS = 1e-4;
 const CHINK_COLOR = '#ebe0c8';
+const EAVE_TV = 0.14;         // roofing thickness a crossing log end may hide in (a bit under roof.js's ~0.165)
 const THUMB_AT = { x: 4000, z: 4000 };   // thumbnails are built far from any neighbours
 
 // ------------------------------------------------------------------ small geometry helpers
@@ -255,7 +256,8 @@ function junction(p, ctx, i, f, myH) {
       let nFree = 0.6;
       for (const o of nOps) if (o) nFree = Math.min(nFree, 1 + HT - (Math.abs(o.x) + o.w / 2 + LIN + CW + 0.06));
       nFree = Math.max(0, Math.round(nFree * 100) / 100);
-      b = { kind: 'L', sz, own, logX, nFree, ext: logX ? 0 : own ? HT : -HT, key: `L${own ? 1 : 0}${sz}${logX ? 'x' : ''}${nFree < 0.6 ? '~' + nFree : ''}` };
+      const eave = logX && y1 >= myH - 0.01 && myH >= H - 0.01 ? eaveRise(p, ctx, n.q, vx, vz) : 0;
+      b = { kind: 'L', sz, own, logX, nFree, eave, ext: logX ? 0 : own ? HT : -HT, key: `L${own ? 1 : 0}${sz}${logX ? 'x' : ''}${eave ? 'e' + eave : ''}${nFree < 0.6 ? '~' + nFree : ''}` };
     } else if (ps.length >= 2) b = { kind: 'T', ext: 0, key: 'T' };
     else if (prev && prev.kind === 'L' && prev.own) b = { ...prev };   // keep the owned corner going up
     else b = { kind: 'free', ext: 0, key: 'f' };
@@ -263,6 +265,25 @@ function junction(p, ctx, i, f, myH) {
     bands.push({ ...b, y0, y1, sx, start });
   }
   return bands;
+}
+
+/**
+ * Crossing log ends at an L-corner stick LOG_OUT past the neighbouring wall, i.e. out under that
+ * wall's eave. If nothing wall-like stands on the neighbour's edge in the storey above (so its top
+ * carries an eave) and a sloped roof panel rests on this storey around the corner, return the
+ * steepest such panel's rise (half-steps per cell) so the top courses can be cut back under it.
+ */
+function eaveRise(p, ctx, nq, vx, vz) {
+  const above = ctx.get(K.W(nq.a, nq.x, nq.y + 1, nq.z));
+  if (above && ctx.defOf(above)?.wallLike) return 0;
+  const hs = 2 * (p.y + 1);
+  let rise = 0;
+  for (const [cx, cz] of [[vx - 1, vz - 1], [vx, vz - 1], [vx - 1, vz], [vx, vz]]) {
+    const q = ctx.get(K.R(cx, hs, cz));
+    const r = q && ctx.defOf(q)?.roof;
+    if (r && r.kind !== 'flat' && r.kind !== 'cap') rise = Math.max(rise, r.rise ?? 1);
+  }
+  return rise;
 }
 
 /** The band of end i containing height y. */
@@ -413,7 +434,40 @@ function buildWallish(p, ctx, spec) {
   for (let k = 0; k < ops.length; k++) buildOpening(e, ops[k], e.rough[k]);
   if (spec.cap) buildCap(e);
   if (spec.extra) spec.extra(e);
+  if (spec.footing) buildFooting(e);
   return g;
+}
+
+/**
+ * A level-0 wall with no floor platform on either side would hover BASE_Y above the grass: give it a
+ * cut-stone footing down into the ground (a garden wall, a lone gable, a shed without a foundation).
+ * Ends follow the corner ownership so neighbouring footings never overlap.
+ */
+function buildFooting(e) {
+  const hw = e.depth / 2 + 0.025, sm = mat('stoneBlock');
+  const y0 = -BASE_Y - 0.06;
+  const end = (i) => {
+    const j = e.J[i][0], sx = j.sx;
+    if (j.kind === 'L') {
+      if (j.logX) {
+        // crossing log ends rest on the footing too; the non-owner's run skips the owner's crossing
+        if (!j.own) box(e.g, sm, sx * (1 + hw), sx * (1 + LOG_OUT), y0, 0, -hw, hw);
+        return sx * (1 + (j.own ? LOG_OUT : -hw));
+      }
+      return sx * (1 + (j.own ? hw : -hw));
+    }
+    if (j.kind === 'T') return sx * (1 - hw);
+    return sx;
+  };
+  box(e.g, sm, end(0), end(1), y0, 0, -hw, hw);
+}
+
+/** Level-0 edge with no foundation / floor / deck on either side (the wall would float). */
+const PLATFORMS = new Set(['foundation', 'floor', 'deck']);
+function needsFooting(p, ctx) {
+  if (p.y !== 0 || !inGridVertex(p.x, p.z)) return false;     // (palette thumbnails are built far off the lot)
+  const cells = p.a === 'x' ? [[p.x, p.z], [p.x, p.z - 1]] : [[p.x, p.z], [p.x - 1, p.z]];
+  return !cells.some(([x, z]) => PLATFORMS.has(ctx.get(K.F(x, 0, z))?.t));
 }
 
 /** x at which face-mounted relief on face side fz should stop at end i. */
@@ -428,7 +482,10 @@ function faceEnd(e, i, fz) {
 }
 
 function buildSlab(e) {
-  const { pts, holes } = slabShape(e.ends[0], e.ends[1], e.top, e.rough);
+  // half-timbered / glazed walls: the timber top plate & corner posts cap the slab; tuck the slab's top
+  // face a few mm under theirs so the two never z-fight (wall tops are seen from above in cutaway view)
+  const top = e.m === 'plaster' || e.m === 'glass' ? (x) => e.top(x) - 0.004 : e.top;
+  const { pts, holes } = slabShape(e.ends[0], e.ends[1], top, e.rough);
   if (e.m === 'glass') noShadow(poly(e.g, mat('windowGlass'), pts, 0.024, 0, holes));
   else poly(e.g, mat(e.m, e.p.c), pts, T, 0, holes);
 }
@@ -517,9 +574,18 @@ function buildLogs(e) {
   const lm = mat(e.m), em = mat('wood');
   const rows = logRows(p.a, top, e.flat);
   const t0 = top(-1), k = (top(1) - top(-1)) / 2;
+  const wallTop = Math.max(t0, top(1));
   const endFor = (i, row) => {
     const j = bandAt(J[i], rowLo(row) + 0.02);
-    return { j, x: j.kind === 'L' && j.logX ? j.sx * (1 + LOG_OUT) : j.sx * (1 + j.ext) };
+    if (!(j.kind === 'L' && j.logX)) return { j, x: j.sx * (1 + j.ext) };
+    let out = LOG_OUT;
+    if (j.eave) {
+      // keep the top courses' ends under the eave of a roof sloping down past the corner:
+      // the roof underside drops `rate` per metre outward and the roofing is ~EAVE_TV thick
+      const rate = (j.eave * STEP) / 2;
+      out = Math.min(LOG_OUT, Math.max(LOG_R + 0.006, (EAVE_TV + wallTop - rowHi(row)) / rate));
+    }
+    return { j, x: j.sx * (1 + out) };
   };
   // Each opening cuts the courses it touches, following its shape (round / arched tops are
   // stepped course by course like a real cabin). steps[n] = [{ row, x0, x1, b, t }] bottom to top.
@@ -575,10 +641,13 @@ function buildLogs(e) {
     for (const s of list) { left.push([s.x0, s.b], [s.x0, s.t]); right.push([s.x1, s.b], [s.x1, s.t]); }
     return [...left, ...right.reverse()];
   });
-  // chinking behind the logs (it also gives gables their exact top line)
+  // chinking behind the logs (it also gives gables their exact top line). On flat walls it stops inside
+  // the top course, so it neither shows as a pale strip along the wall top nor z-fights the sawn
+  // top of a half log.
   const chOps = [];
   outlines.forEach((pts, n) => { if (pts) chOps.push({ x: rough[n].x, y: steps[n][0].b, pts }); });
-  const { pts, holes } = slabShape(e.ends[0], e.ends[1], top, chOps);
+  const chTop = e.flat ? (x) => top(x) - 0.045 : top;
+  const { pts, holes } = slabShape(e.ends[0], e.ends[1], chTop, chOps);
   poly(g, mat('plaster', CHINK_COLOR), pts, CHINK_D, 0, holes);
   // plank blocking between the cut log ends and the opening frame
   outlines.forEach((out, n) => {
@@ -877,12 +946,13 @@ function registerWall(def) {
       const f = frameOf(p), top = topFn(p);
       let key = p.a + bandsKey(junction(p, ctx, 0, f, top(-1))) + '|' + bandsKey(junction(p, ctx, 1, f, top(1)));
       if (def.needsOutside) key += '|' + outsideSide(p, ctx, f);
+      if (needsFooting(p, ctx)) key += '|g';
       return key;
     },
     build(p, ctx) {
       return buildWallish(p, ctx, {
         top: topFn(p), flat: !def.gable, gable: !!def.gable, ops: opsFn(p).filter(Boolean),
-        cap: def.cap, extra: def.extra, needsOutside: def.needsOutside,
+        cap: def.cap, extra: def.extra, needsOutside: def.needsOutside, footing: needsFooting(p, ctx),
       });
     },
   });

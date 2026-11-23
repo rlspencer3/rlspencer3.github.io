@@ -132,7 +132,7 @@ const KEYS = [
   { y: -1.0, zen: '#060a20', hor: '#1a2248', glow: '#2b3866', sun: '#b4c0e8', si: 0.38, hs: '#56628c', hg: '#22242e', hi: 0.95, cl: '#2e3860', cs: '#141a32', ex: 1.12, st: 1 },
   { y: -0.3, zen: '#08102a', hor: '#1d2852', glow: '#2e3c70', sun: '#b4c0e8', si: 0.38, hs: '#56628c', hg: '#22242e', hi: 0.95, cl: '#323c66', cs: '#161c36', ex: 1.12, st: 1 },
   { y: -0.13, zen: '#141d4c', hor: '#40467e', glow: '#8a6a9a', sun: '#b0b8e8', si: 0.42, hs: '#6a6c9c', hg: '#2a2834', hi: 0.85, cl: '#5a5482', cs: '#262a52', ex: 1.1, st: 0.75 },
-  { y: -0.03, zen: '#2f417c', hor: '#d38c7c', glow: '#ff9466', sun: '#ff9a6a', si: 0.5, hs: '#a894c4', hg: '#46383e', hi: 0.95, cl: '#f2a28a', cs: '#5c5280', ex: 1.08, st: 0.12 },
+  { y: -0.03, zen: '#2f417c', hor: '#d38c7c', glow: '#ff9466', sun: '#ff9a6a', si: 0.75, hs: '#b49cc4', hg: '#54443e', hi: 1.05, cl: '#f2a28a', cs: '#5c5280', ex: 1.1, st: 0.12 },
   { y: 0.06, zen: '#5379bd', hor: '#ffb57c', glow: '#ffb25a', sun: '#ffb070', si: 1.8, hs: '#f4c8a8', hg: '#6c5a46', hi: 1.05, cl: '#ffd2a4', cs: '#a8879c', ex: 1.03, st: 0 },
   { y: 0.2, zen: '#6a9edb', hor: '#ffdcb4', glow: '#ffd48e', sun: '#ffd49a', si: 2.4, hs: '#f6e6d0', hg: '#7c7856', hi: 1.15, cl: '#fff2e0', cs: '#bcb0bc', ex: 1.0, st: 0 },
   { y: 0.45, zen: '#5c9be0', hor: '#d2e8f3', glow: '#fff4dc', sun: '#fff2df', si: 2.6, hs: '#e4f0ff', hg: '#8c9a6c', hi: 1.22, cl: '#ffffff', cs: '#c8d2de', ex: 1.0, st: 0 },

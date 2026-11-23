@@ -28,9 +28,25 @@ export class Effects {
     this.tweens.push({ obj, t: 0, d: duration, kind: 'pop' });
   }
 
-  /** Shrink-out then call done(). */
+  /**
+   * Shrink-out then call done(). An object that is no longer in the scene (e.g. a piece just removed from the
+   * world) is shown in the scene for the duration of the animation and taken out again afterwards.
+   */
   popOut(obj, done, duration = 0.18) {
-    this.tweens.push({ obj, t: 0, d: duration, kind: 'out', done });
+    const borrowed = !obj.parent;
+    if (borrowed) this.scene.add(obj);
+    this.tweens.push({ obj, t: 0, d: duration, kind: 'out', done, borrowed });
+  }
+
+  /** Is obj being animated by a tween? */
+  isAnimating(obj) {
+    for (let i = 0; i < this.tweens.length; i++) if (this.tweens[i].obj === obj) return true;
+    return false;
+  }
+
+  /** Move running tweens from one object to another (a piece rebuilt in place keeps its animation). */
+  retarget(from, to) {
+    for (let i = 0; i < this.tweens.length; i++) if (this.tweens[i].obj === from) this.tweens[i].obj = to;
   }
 
   /** Soft dust puff at a world position. */
@@ -73,6 +89,7 @@ export class Effects {
       if (k >= 1) {
         if (tw.kind === 'pop') tw.obj.scale.setScalar(1);
         this.tweens.splice(i, 1);
+        if (tw.borrowed && tw.obj.parent === this.scene) this.scene.remove(tw.obj);
         tw.done?.();
       }
     }

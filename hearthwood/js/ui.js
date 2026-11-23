@@ -223,8 +223,9 @@ export function init(app) {
   const counter = h('div', { class: 'hw-count', title: 'Pieces placed', 'aria-label': 'Pieces placed' }, h('span', { class: 'hw-count-ic' }, '🪵'), countNum);
   const btnMenu = btn('hw-rbtn hw-menu-btn', 'Menu', ico('menu'), () => openSheet('main'), { sound: false, title: 'Menu (M)' });
 
-  const lvDown = btn('hw-lv-btn', 'Down a floor', ico('down'), () => builder.setLevel(state.level - 1), { sound: false, title: 'Down a floor (−)' });
-  const lvUp = btn('hw-lv-btn', 'Up a floor', ico('up'), () => builder.setLevel(state.level + 1), { sound: false, title: 'Up a floor (+)' });
+  const floorToast = () => toast(state.level === 0 ? '🪜 Floor 1 — building on the ground' : `🪜 Floor ${state.level + 1} — the grid now sits on top of Floor ${state.level}`, 'info', 2000);
+  const lvDown = btn('hw-lv-btn', 'Down a floor', ico('down'), () => { const l = state.level; builder.setLevel(l - 1); if (state.level !== l) floorToast(); }, { sound: false, title: 'Down a floor (−)' });
+  const lvUp = btn('hw-lv-btn', 'Up a floor', ico('up'), () => { const l = state.level; builder.setLevel(l + 1); if (state.level !== l) floorToast(); }, { sound: false, title: 'Up a floor (+)' });
   const lvBars = [];
   const lvStack = h('span', { class: 'hw-lv-stack', 'aria-hidden': 'true' });
   for (let i = MAX_LEVEL; i >= 0; i--) { const b = h('i'); lvBars[i] = b; lvStack.append(b); }
@@ -282,7 +283,8 @@ export function init(app) {
   const drawIc = h('span', { class: 'hw-tool-ic' }), drawLb = h('span', { class: 'hw-tool-lb' });
   const btnDraw = btn('hw-tool hw-draw', 'Drag mode', [drawIc, drawLb], () => {
     state.set({ drawMode: !state.drawMode });
-    toast(state.drawMode ? '✏️ Draw: drag a finger to place pieces in a row' : '✋ Look: drag a finger to look around', 'info', 2600);
+    const what = state.tool === 'erase' ? 'tidy away a row of pieces' : state.tool === 'paint' ? 'paint many pieces' : 'place pieces in a row';
+    toast(state.drawMode ? `✏️ Draw: drag a finger to ${what} · pinch to move the view` : '✋ Look: drag a finger to look around', 'info', 2600);
   }, { title: 'Draw / Look (D)' });
   const seeIc = h('span', { class: 'hw-tool-ic' }), seeLb = h('span', { class: 'hw-tool-lb' });
   const btnSee = btn('hw-tool hw-see', 'Show all floors', [seeIc, seeLb], () => {
@@ -306,6 +308,8 @@ export function init(app) {
     seeLb.textContent = state.seeAll ? 'All' : 'Cutaway';
     btnSee.classList.toggle('is-on', !state.seeAll);
     btnSee.setAttribute('aria-pressed', String(!state.seeAll));
+    modeChip.classList.toggle('is-on', !!state.drawMode && state.tool !== 'pick');
+    chipTx.textContent = state.tool === 'erase' ? 'drag to tidy many' : state.tool === 'paint' ? 'drag to paint many' : 'drag to place in a row';
   }
 
   // ------------------------------------------------------------------ build tray
@@ -336,7 +340,21 @@ export function init(app) {
   const syncTrayH = () => {
     const r = tray.getBoundingClientRect();
     root.style.setProperty('--tray-h', `${Math.round(Math.max(0, window.innerHeight - r.top))}px`);
+    syncInsets();
   };
+  // let the camera centre the view in the part of the screen the bars don't cover
+  function syncInsets() {
+    const rig = app.rig;
+    if (!rig?.setInsets) return;
+    if (state.photoMode) { rig.setInsets(0, 0, 0, 0); return; }
+    let tb = top.getBoundingClientRect().bottom;
+    const hudEl = root.querySelector('.hw-hud.is-open');
+    if (hudEl) tb = Math.max(tb, hudEl.getBoundingClientRect().bottom);
+    const tr = tray.getBoundingClientRect().top;
+    const rl = rail.getBoundingClientRect().left;
+    const right = rl > window.innerWidth * 0.6 ? Math.round(window.innerWidth - rl) : 0;
+    rig.setInsets(Math.max(0, Math.round(tb)), Math.max(0, Math.round(window.innerHeight - tr)), 0, right);
+  }
   if (typeof ResizeObserver !== 'undefined') new ResizeObserver(syncTrayH).observe(tray);
   window.addEventListener('resize', syncTrayH);
 
@@ -361,12 +379,23 @@ export function init(app) {
       if (!n) continue;
       const short = SHORT_CAT[cat.id] || cat.name.split(/[ &]/)[0];
       const b = btn('hw-tab', cat.name, [h('span', { class: 'hw-tab-ic' }, cat.icon), h('span', { class: 'hw-tab-lb' }, short), h('span', { class: 'hw-tab-full' }, cat.name)], () => {
-        state.set({ category: cat.id });
+        openCategory(cat.id);
       }, { title: cat.name, attrs: { role: 'tab', 'data-cat': cat.id } });
       tabEls.set(cat.id, b);
       tabs.append(b);
     }
     markTab();
+  }
+  // a tab hands you a piece from that category straight away (the last one you used there, else the first),
+  // so a new player never builds foundations while looking at the Walls tab
+  const lastInCat = {};
+  function openCategory(id) {
+    const cur = curDef();
+    if (cur && cur.cat === id) { if (state.category !== id) state.set({ category: id }); return; }
+    const list = catalog.piecesIn(id);
+    const want = list.find((d) => d.id === lastInCat[id]) || list[0];
+    if (want) builder.selectPiece(want.id);
+    else state.set({ category: id });
   }
   function markTab() {
     for (const [id, b] of tabEls) {
@@ -758,8 +787,13 @@ export function init(app) {
   const topStack = h('div', { class: 'hw-topstack' });
   const hud = h('div', { class: 'hw-hud hw-hide-photo', role: 'status' });
   const toasts = h('div', { class: 'hw-toasts', 'aria-live': 'polite' });
+  // while Draw is on, say so (and offer the way back) right where the eye is
+  const chipTx = h('small');
+  const modeChip = btn('hw-modechip hw-hide-photo', 'Back to look mode', [h('span', { class: 'hw-modechip-ic' }, '✏️'), h('b', null, 'Draw'), chipTx, ico('close')],
+    () => { state.set({ drawMode: false }); toast('✋ Look: drag a finger to look around', 'info', 1800); }, { attrs: { 'data-act': 'draw-off' }, title: 'Back to look mode (D)' });
   topStack.append(hud, toasts);
-  root.append(topStack);
+  root.append(topStack, modeChip);
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => syncInsets()).observe(hud);
 
   const live = new Map(); // text -> { el, timer }
   function toast(text, kind = 'info', ms = 2400) {
@@ -829,13 +863,20 @@ export function init(app) {
     hudStop.setAttribute('aria-label', finished ? 'Close' : 'Stop guides');
     hud.classList.add('is-open');
     clearTimeout(hudHide);
-    if (finished) hudHide = setTimeout(() => { if (bp && bp.done >= bp.total) { hud.classList.remove('is-open'); } }, 6000);
+    if (finished) hudHide = setTimeout(() => { if (bp && bp.done >= bp.total) { hud.classList.remove('is-open'); tuckForGuides(false); } }, 6000);
+  }
+  const shortMQ = matchMedia('(orientation: landscape) and (max-height: 540px)');
+  let autoTucked = false;
+  function tuckForGuides(on) {
+    if (on && shortMQ.matches && !collapsed) { autoTucked = true; setCollapsed(true, false); }
+    else if (!on && autoTucked) { autoTucked = false; if (collapsed) setCollapsed(false, false); }
   }
   function stopGuides() {
     try { app.blueprints?.stop?.(); } catch (e) { console.warn(e); }
     bp = null;
     if (state.blueprint) state.set({ blueprint: null });
     hud.classList.remove('is-open');
+    tuckForGuides(false);
   }
 
   // ------------------------------------------------------------------ menu sheet
@@ -948,13 +989,17 @@ export function init(app) {
   }
 
   async function newBuild() {
-    if (world.count) {
+    if (world.count && !onlyWelcome()) {
       const ok = await ask({ icon: '🌱', title: 'Start a new build?', text: 'The meadow will be cleared. You can still undo it.', buttons: [{ label: 'Clear the meadow', value: 'yes', kind: 'danger' }] });
       if (ok !== 'yes') return;
     }
     if (app.blueprints?.active?.()) stopGuides();
     if (app.newBuild) app.newBuild(); else world.clear({ record: true });
     state.set({ level: 0, seeAll: true, hOffset: 0, tool: 'build' });
+    // hand the player what the toast tells them to start with, and frame the middle of the meadow
+    if (catalog.getDef('foundation')) builder.selectPiece('foundation');
+    const g = app.rig?.goal;
+    if (g) app.rig.focus(0, 1, 2, Math.max(18, Math.min(32, g.radius)));
     closeSheet(false);
     sfx('success');
     toast('🌱 Fresh meadow — start with a foundation!', 'success');
@@ -1008,10 +1053,13 @@ export function init(app) {
     } else toast('Could not save — storage is full', 'warn');
     if (page === 'saves') refreshPage();
   }
+  /** True when the meadow only holds the first-visit scenery (nothing the player built). */
+  const onlyWelcome = () => app.welcomeLot !== undefined && world.version === app.welcomeLot;
+
   async function loadFrom(s) {
     const data = storage.loadSlot(s.n);
     if (!data) { toast('That slot is empty', 'warn'); return; }
-    if (world.count) {
+    if (world.count && !onlyWelcome()) {
       const ok = await ask({ icon: '🏡', title: `Load “${data.name || `House ${s.n}`}”?`, text: 'Your current build will be replaced. Save it first if you want to keep it.', buttons: [{ label: 'Load it', value: 'yes', kind: 'primary' }] });
       if (ok !== 'yes') return;
     }
@@ -1021,7 +1069,9 @@ export function init(app) {
     if (data.name) lsSet(LS_NAME, data.name);
     closeSheet(false);
     sfx('success');
-    toast(`🏡 Welcome back to ${data.name || `House ${s.n}`}`, 'success');
+    toast(data.dropped
+      ? `🏡 Welcome back to ${data.name || `House ${s.n}`} (${data.dropped} piece${data.dropped === 1 ? '' : 's'} couldn’t be used)`
+      : `🏡 Welcome back to ${data.name || `House ${s.n}`}`, data.dropped ? 'info' : 'success', data.dropped ? 3600 : 2400);
   }
   async function delSlot(s) {
     const ok = await ask({ icon: '🗑️', title: `Delete “${s.name}”?`, text: `Slot ${s.n} will be emptied. This can’t be undone.`, buttons: [{ label: 'Delete', value: 'yes', kind: 'danger' }] });
@@ -1096,8 +1146,7 @@ export function init(app) {
 
   async function startBlueprint(b, how) {
     // the scenery lot a brand-new player starts with doesn't count as "their build"
-    const onlyWelcome = app.welcomeLot !== undefined && world.version === app.welcomeLot;
-    if (onlyWelcome) world.clear({ record: false });
+    if (onlyWelcome()) world.clear({ record: false });
     else if (world.count) {
       const v = await ask({
         icon: b.emoji || '📐', title: 'Your meadow isn’t empty',
@@ -1114,6 +1163,7 @@ export function init(app) {
         app.blueprints.startGuided(b.id);
         bp = (bp && bp.id === b.id) ? bp : { id: b.id, done: 0, total: b.count ?? b.pieceCount ?? 0, stage: 0, stageName: '' };
         renderHud();
+        tuckForGuides(true);
         sfx('open');
       } else {
         app.blueprints.stamp(b.id, { animate: true, record: true });
@@ -1164,7 +1214,7 @@ export function init(app) {
     if (!code || !code.trim()) { toast('Paste a code first', 'warn'); return; }
     const data = await storage.importCode(code);
     if (!data || !Array.isArray(data.pieces)) { toast('Hmm, that code doesn’t look right', 'warn'); return; }
-    if (world.count) {
+    if (world.count && !onlyWelcome()) {
       const ok = await ask({ icon: '📬', title: 'Open this home?', text: `It has ${data.pieces.length} pieces. Your current build will be replaced.`, buttons: [{ label: 'Open it', value: 'yes', kind: 'primary' }] });
       if (ok !== 'yes') return;
     }
@@ -1172,7 +1222,10 @@ export function init(app) {
     app.loadBuild(data);
     closeSheet(false);
     sfx('success');
-    toast(`📬 Opened a home with ${data.pieces.length} pieces`, 'success');
+    const n = data.pieces.length, piecesTxt = `${n} piece${n === 1 ? '' : 's'}`;
+    toast(data.dropped
+      ? `📬 Opened a home with ${piecesTxt} (${data.dropped} couldn’t be used)`
+      : `📬 Opened a home with ${piecesTxt}`, data.dropped ? 'info' : 'success', data.dropped ? 3600 : 2400);
   }
   async function copyText(text, ta) {
     try { await navigator.clipboard.writeText(text); return true; } catch { /* fall back */ }
@@ -1184,7 +1237,10 @@ export function init(app) {
     const on = !!state[key];
     const b = btn('hw-switch' + (on ? ' is-on' : ''), label, h('i'), () => state.set({ [key]: !state[key] }), { attrs: { role: 'switch', 'aria-checked': String(on), 'data-key': key } });
     pageRefs[key] = b;
-    return h('div', { class: 'hw-set-row' }, h('span', { class: 'hw-set-ic' }, icon), h('span', { class: 'hw-set-lb' }, label), b);
+    // the whole row is the target (the switch itself is small)
+    const row = h('div', { class: 'hw-set-row hw-set-tap' }, h('span', { class: 'hw-set-ic' }, icon), h('span', { class: 'hw-set-lb' }, label), b);
+    row.addEventListener('click', (e) => { if (!e.target.closest('button')) b.click(); });
+    return row;
   }
   function syncSettings(changed) {
     if (page !== 'settings') return;
@@ -1238,6 +1294,7 @@ export function init(app) {
   function pageHelp() {
     const gestures = [
       ['👆', 'Tap', 'Place the selected piece on the glowing spot.'],
+      ['✋', 'Press & hold', 'Preview the piece under your finger — slide to adjust, lift to place. Lift over the tray to cancel.'],
       ['☝️', 'Drag', 'Look around your home (in Look mode).'],
       ['🤏', 'Pinch', 'Zoom in close or out wide.'],
       ['✌️', 'Two-finger drag', 'Slide the view across the meadow.'],
@@ -1246,7 +1303,8 @@ export function init(app) {
     const tips = [
       ['✏️', 'Draw mode', 'Switch the rail from Look to Draw and one-finger drags place pieces in a row — perfect for long walls and fences. Pinch and twist still move the camera.'],
       ['🪟', 'Swap walls for windows', 'Pick a window or door and tap an existing wall — it swaps right in.'],
-      ['🏠', 'Roofs', 'Roof slopes stack toward the ridge by themselves. Nudge them with the Height ▲▼ buttons.'],
+      ['🏠', 'Roofs', 'Tap the top of your walls — roof slopes settle on them and stack toward the ridge by themselves. Use Turn so the two sides face each other, and Height ▲▼ to nudge.'],
+      ['🔺', 'Gables', 'Pick a Gable Wall and tap the open triangle at either end of the roof — it fits itself to the slope.'],
       ['🪜', 'Upstairs', 'Use the Floor buttons at the top to build higher. Going down shows a cutaway.'],
       ['💧', 'Pick', 'Tap a placed piece to copy its piece, material and colours.'],
     ];
@@ -1260,7 +1318,7 @@ export function init(app) {
         h('div', { class: 'hw-helps' }, gestures.map(([i, t, d]) => h('div', { class: 'hw-help' }, h('span', { class: 'hw-help-ic' }, i), h('div', null, h('b', null, t), h('small', null, d)))))),
       h('section', { class: 'hw-card-sec' }, h('h3', null, 'Building tips'),
         h('div', { class: 'hw-helps' }, tips.map(([i, t, d]) => h('div', { class: 'hw-help' }, h('span', { class: 'hw-help-ic' }, i), h('div', null, h('b', null, t), h('small', null, d)))))),
-      h('section', { class: 'hw-card-sec' }, h('h3', null, 'Keyboard & mouse'),
+      coarse && !matchMedia('(any-pointer: fine)').matches ? null : h('section', { class: 'hw-card-sec' }, h('h3', null, 'Keyboard & mouse'),
         h('p', { class: 'hw-note' }, 'Left-drag to look · right-drag or Shift-drag to slide · wheel to zoom.'),
         h('div', { class: 'hw-keys' }, keys.map(([k, d]) => h('div', { class: 'hw-key' }, h('kbd', null, k), h('span', null, d))))));
   }
@@ -1338,6 +1396,8 @@ export function init(app) {
 
   const welcome = h('div', { class: 'hw-welcome-wrap' });
   root.append(welcome);
+  // tapping the meadow around the card just lets you in (e.g. to open the menu and paste a friend's code)
+  welcome.addEventListener('click', (e) => { if (e.target === welcome) hideWelcome(); });
   function showWelcome() {
     welcome.textContent = '';
     const card = h('div', { class: 'hw-welcome', role: 'dialog', 'aria-label': 'Welcome to Hearthwood' },
@@ -1375,7 +1435,12 @@ export function init(app) {
     if (has('level')) renderLevel();
     if (has('tool', 'drawMode', 'seeAll')) renderRail();
     if (has('category')) { markTab(); renderCards(); }
-    if (has('pieceId')) { markCard(); if (popOpen && pop.classList.contains('hw-pop-info')) closePop(); }
+    if (has('pieceId')) {
+      markCard();
+      if (popOpen && pop.classList.contains('hw-pop-info')) closePop();
+      const d = curDef();
+      if (d) lastInCat[d.cat] = d.id;
+    }
     if (has('mats', 'colors', 'accent')) refreshThumbs();
     if (has('pieceId', 'tool', 'mats', 'colors', 'accent', 'rot', 'hOffset', 'drawMode', 'paintTarget')) {
       if (popOpen && pop.classList.contains('hw-pop-palette') && has('pieceId', 'tool')) closePop();
@@ -1405,19 +1470,27 @@ export function init(app) {
   });
   events.on('blueprint-progress', (d) => {
     if (!d) return;
+    const was = bp && bp.id === d.id ? bp.done : -1;
     bp = { ...d };
     renderHud();
+    // finished: show the whole house (roof on) for the celebration
+    if (d.total && d.done >= d.total && was >= 0 && was < d.total && !state.seeAll) state.set({ seeAll: true });
   });
 
   function setPhotoMode(on) {
     root.classList.toggle('photo', !!on);
     closePop();
+    syncInsets();
+    setTimeout(syncInsets, 420);   // after the bars finish sliding
     if (on) {
       closeSheet(false);
       hideWelcome(false);
       toast('📸 Frame your shot, then tap the shutter', 'info', 2600);
     }
   }
+
+  // iOS Safari ignores user-scalable=no: stop pinches on the UI chrome from zooming the whole page
+  for (const t of ['gesturestart', 'gesturechange']) document.addEventListener(t, (e) => e.preventDefault(), { passive: false });
 
   // keyboard: menu / help / escape (builder.js owns the building shortcuts)
   window.addEventListener('keydown', (e) => {

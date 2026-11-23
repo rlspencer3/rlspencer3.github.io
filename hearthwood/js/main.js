@@ -27,9 +27,21 @@ window.addEventListener('unhandledrejection', (e) => reportError('promise', e.re
 // ------------------------------------------------------------------ renderer
 
 const container = document.getElementById('game');
-const lowEnd = (navigator.hardwareConcurrency || 4) <= 4 && /Mobi|Android/i.test(navigator.userAgent);
-const renderer = new THREE.WebGLRenderer({ antialias: !lowEnd, powerPreference: 'high-performance', preserveDrawingBuffer: false });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, lowEnd ? 1.5 : 2));
+const MOBILE = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+  || (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 900);
+const lowEnd = MOBILE && ((navigator.hardwareConcurrency || 4) <= 4 || (navigator.deviceMemory || 4) <= 2);
+
+/** Device-pixel cap per quality setting: 'low' renders at CSS resolution, others at most 2× (1.5× on weak phones). */
+function pixelRatioFor(q = state.quality) {
+  const dpr = window.devicePixelRatio || 1;
+  if (q === 'low') return Math.min(dpr, 1);
+  if (q === 'high') return Math.min(dpr, 2);
+  return Math.min(dpr, lowEnd ? 1.5 : 2);
+}
+// MSAA can only be chosen when the context is created: a quality change applies to antialiasing on next load.
+const antialias = state.quality === 'high' || (state.quality !== 'low' && !lowEnd);
+const renderer = new THREE.WebGLRenderer({ antialias, powerPreference: 'high-performance', preserveDrawingBuffer: false });
+renderer.setPixelRatio(pixelRatioFor());
 renderer.setSize(container.clientWidth, container.clientHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -56,10 +68,19 @@ fallbackGround.rotation.x = -Math.PI / 2;
 fallbackGround.receiveShadow = true;
 scene.add(fallbackGround);
 
-const world = new World(scene);
+// ?batch=0 turns static batching off (A/B checks); ?batchsize=n sets the shadow-proxy region edge in cells;
+// ?batchglass=1 also merges transparent materials (fewer draw calls, but glass is then sorted per batch)
+const world = new World(scene, {
+  batch: params.get('batch') === '0' ? false : {
+    size: parseInt(params.get('batchsize'), 10) || undefined,
+    batchTransparent: params.get('batchglass') === '1',
+  },
+});
 const rig = new CameraRig(camera, renderer.domElement);
 rig.drawMode = state.drawMode;
 const effects = new Effects(scene);
+world.batcher.effects = effects;                                 // tweening pieces stay unbatched
+world.onRemount = (from, to) => effects.retarget(from, to);      // a rebuilt piece keeps its pop-in
 
 const app = {
   THREE, scene, camera, renderer, world, rig, effects, state, events, catalog, materials, storage,
@@ -141,13 +162,17 @@ async function boot() {
     if (saved?.pieces?.length) app.loadBuild(saved);
     else if (app.blueprints?.welcome) app.blueprints.welcome();
   }
-  if (params.get('time')) state.set({ time: parseFloat(params.get('time')) });
-  if (params.get('season')) state.set({ season: params.get('season') });
-  if (params.get('level')) state.set({ level: parseInt(params.get('level'), 10) || 0 });
+  world.batcher.flush();     // starting content: bake on the next frames (no quiet period)
+  // dev URL params (validated: a bad value is ignored rather than poisoning state)
+  const tq = parseFloat(params.get('time'));
+  if (Number.isFinite(tq)) state.set({ time: ((tq % 1) + 1) % 1 });
+  const sq = params.get('season');
+  if (['spring', 'summer', 'autumn', 'winter'].includes(sq)) state.set({ season: sq });
+  if (params.get('level')) state.set({ level: Math.max(0, Math.min(MAX_LEVEL, parseInt(params.get('level'), 10) || 0)) });
   if (params.get('seeAll')) state.set({ seeAll: params.get('seeAll') === '1' });
   if (params.get('cam')) {
     const [th, ph, r, tx, ty, tz] = params.get('cam').split(',').map(Number);
-    rig.setView({ t: [tx || 0, ty || 1, tz || 0], th, ph, r }, true);
+    rig.setView({ t: [tx || 0, ty || 1, tz || 0], th, ph, r }, true);   // non-finite values: ignored by setView
   }
   rig.snap();
 
@@ -169,29 +194,63 @@ async function boot() {
 // ------------------------------------------------------------------ dev showcase
 
 function buildShowcase(cat) {
-  const defs = cat === 'all' ? catalog.allDefs() : catalog.piecesIn(cat);
-  let row = 0;
+  const all = cat === 'all';
+  const defs = all ? catalog.allDefs() : catalog.piecesIn(cat);
   const pieces = [];
-  for (const def of defs) {
-    const mats = def.mats && def.mats.length ? def.mats : [undefined];
-    mats.forEach((m, i) => {
-      const x = -9 + i * 2, z = -9 + row * 2;
-      const p = { t: def.id, x, y: 0, z, m, r: def.slot === 'cell' ? 0 : 0, a: 'x', ...(def.showcase || {}) };
-      if (def.layer === 'R') p.h = 0;
-      pieces.push(p);
-    });
-    row++;
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  const put = (def, m, x, z) => {
+    const p = { t: def.id, x, y: 0, z, m, r: 0, a: 'x', ...(def.showcase || {}) };
+    if (def.layer === 'R') p.h = 0;
+    pieces.push(p);
+    x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z);
+  };
+  const ROWS = 10;                 // rows per block: z = -9 … 9 stays on the lot
+  if (all) {
+    // contact sheet: every piece once (default material), 10 per row, 2 cells apart, all on the lot
+    // (the category showcases cover every material)
+    defs.forEach((def, i) => put(def, def.mats?.[0], -9 + (i % ROWS) * 2, -9 + Math.floor(i / ROWS) * 2));
+  } else {
+    // rows = pieces, columns = materials, 2 cells apart from cell (-9, -9); a category with more than
+    // ROWS pieces wraps into side-by-side blocks (centred on the lot when they don't fit from x = -9)
+    const blocks = [];
+    for (let b = 0; b < defs.length; b += ROWS) {
+      const list = defs.slice(b, b + ROWS);
+      blocks.push({ list, w: 2 * Math.max(...list.map((d) => (d.mats && d.mats.length) || 1)) });
+    }
+    const total = blocks.reduce((a, b) => a + b.w + 1, -1);
+    let bx = total <= 19 ? -9 : -Math.floor(total / 2);
+    for (const { list, w } of blocks) {
+      list.forEach((def, r) => {
+        const mats = def.mats && def.mats.length ? def.mats : [undefined];
+        mats.forEach((m, i) => put(def, m, bx + i * 2, -9 + r * 2));
+      });
+      bx += w + 1;
+    }
   }
   world.load({ pieces });
   state.set({ seeAll: true, level: 0 });
-  rig.setView({ t: [-4, 1, -4 + row], th: 0.6, ph: 0.95, r: 22 + row * 1.2 }, true);
-  app.showcase = { cat, rows: row, pieces: pieces.length };
+  app.showcase = { cat, rows: all ? Math.ceil(defs.length / ROWS) : defs.length, pieces: pieces.length };
+  // frame the layout: the closest view (from the usual angle) that keeps every corner of its box on screen
+  if (!pieces.length) return;
+  const X0 = x0 * CELL, X1 = (x1 + 1) * CELL, Z0 = z0 * CELL, Z1 = (z1 + 1) * CELL;
+  const t = [(X0 + X1) / 2, 1, (Z0 + Z1) / 2], v = new THREE.Vector3();
+  for (let r = 14; ; r *= 1.05) {
+    rig.setView({ t, th: 0.6, ph: 0.95, r }, true);
+    let inside = true;
+    for (let i = 0; i < 8 && inside; i++) {
+      v.set(i & 1 ? X1 : X0, i & 2 ? 2.5 : 0, i & 4 ? Z1 : Z0).project(camera);
+      inside = Math.abs(v.x) < 0.9 && Math.abs(v.y) < 0.94;   // tall pieces stick out of the box a little
+    }
+    if (inside || r >= rig.maxRadius) break;
+  }
 }
 
 // ------------------------------------------------------------------ loop
 
 function resize() {
   const w = container.clientWidth, h = container.clientHeight;
+  const pr = pixelRatioFor();
+  if (renderer.getPixelRatio() !== pr) renderer.setPixelRatio(pr);
   renderer.setSize(w, h);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
@@ -200,6 +259,7 @@ window.addEventListener('resize', resize);
 window.visualViewport?.addEventListener('resize', resize);
 
 state.on((changed) => {
+  if (changed.includes('quality')) resize();
   if (changed.includes('shadows')) {
     renderer.shadowMap.enabled = state.shadows;
     scene.traverse((o) => { if (o.material) o.material.needsUpdate = true; });
@@ -219,6 +279,7 @@ function frame() {
   try { app.audio?.update?.(dt); } catch (e) { reportError('audio.update', e); app.audio.update = null; }
   try { app.blueprints?.update?.(dt); } catch (e) { reportError('blueprints.update', e); app.blueprints.update = null; }
   try { app.ui?.update?.(dt); } catch (e) { reportError('ui.update', e); app.ui.update = null; }
+  try { if (world.tick(dt)) renderer.shadowMap.needsUpdate = true; } catch (e) { reportError('world.tick', e); world.batcher.setEnabled(false); }
   renderer.render(scene, camera);
   fpsAcc += dt; fpsFrames++;
   if (fpsAcc > 1) { app.fps = fpsFrames / fpsAcc; fpsAcc = 0; fpsFrames = 0; }

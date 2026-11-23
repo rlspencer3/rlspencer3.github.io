@@ -478,6 +478,9 @@ registerPiece({
     const g = new THREE.Group();
     const m = mat(p.m);
     const v = variantOf(p);
+    // flagstones & pavers are bedded in soil / sand: fill the joints so they don't show the bright lawn
+    // (and the build grid) through every gap; stepping stones keep their grass
+    if (p.m === 'floorStone' || p.m === 'brick') pb(g, mat(p.m === 'brick' ? 'path' : 'dirt'), -1, 1, GROUND - 0.03, GROUND + 0.007, -1, 1);
     if (p.m === 'floorStone') flagstones(g, m, v);
     else if (p.m === 'brick') {
       const n = (dx, dz) => ctx.get(K.F(p.x + dx, 0, p.z + dz))?.t === 'path';

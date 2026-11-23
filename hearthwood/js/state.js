@@ -37,16 +37,54 @@ const defaults = {
 
 const PERSIST = ['time', 'timeFlow', 'season', 'weather', 'sound', 'music', 'shadows', 'quality', 'mats', 'colors', 'accent', 'slot'];
 
+// Saved settings are checked before use: an old version, a hand-edited value or a NaN written by a bad
+// URL parameter must never reach the game (a null `mats` would break every placement).
+const ENUMS = {
+  season: ['spring', 'summer', 'autumn', 'winter'],
+  weather: ['clear', 'rain', 'snow', 'leaves'],
+  quality: ['low', 'high', 'auto'],
+};
+const COLOR_RE = /^#[0-9a-fA-F]{3,8}$/;
+const ID_RE = /^[A-Za-z0-9_-]{1,48}$/;
+const isMap = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+/** Keep only string → string entries whose values pass `ok`. */
+function cleanMap(v, ok) {
+  const out = {};
+  for (const [k, x] of Object.entries(v)) if (typeof x === 'string' && ok(x) && k.length <= 48) out[k] = x;
+  return out;
+}
+function cleanSetting(k, v) {
+  if (ENUMS[k]) return ENUMS[k].includes(v) ? v : undefined;
+  switch (k) {
+    case 'time': return typeof v === 'number' && Number.isFinite(v) ? ((v % 1) + 1) % 1 : undefined;
+    case 'slot': return Number.isInteger(v) && v >= 1 && v <= 99 ? v : undefined;
+    case 'accent': return typeof v === 'string' && COLOR_RE.test(v) ? v : undefined;
+    case 'mats': return isMap(v) ? cleanMap(v, (x) => ID_RE.test(x)) : undefined;
+    case 'colors': return isMap(v) ? cleanMap(v, (x) => COLOR_RE.test(x)) : undefined;
+    default: return typeof v === typeof defaults[k] ? v : undefined;
+  }
+}
+
 function loadSettings() {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return {};
     const obj = JSON.parse(raw);
+    if (!isMap(obj)) return {};
     const out = {};
-    for (const k of PERSIST) if (k in obj) out[k] = obj[k];
+    for (const k of PERSIST) {
+      if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
+      const v = cleanSetting(k, obj[k]);
+      if (v !== undefined) out[k] = v;
+    }
     return out;
   } catch { return {}; }
 }
+
+// Settings are written at most every SAVE_MS (time flow and the time slider change `time` many times a
+// second; localStorage writes are synchronous) and flushed when the page is hidden or closed.
+const SAVE_MS = 600;
+let saveTimer = 0;
 
 export const state = {
   ...defaults,
@@ -59,7 +97,7 @@ export const state = {
       if (this[k] !== v) { this[k] = v; changed.push(k); }
     }
     if (!changed.length) return;
-    if (changed.some((k) => PERSIST.includes(k))) this.save();
+    if (!saveTimer && changed.some((k) => PERSIST.includes(k))) saveTimer = setTimeout(() => this.save(), SAVE_MS);
     for (const fn of listeners) {
       try { fn(changed, this); } catch (e) { console.error(e); }
     }
@@ -68,7 +106,10 @@ export const state = {
   // Subscribe to changes. Returns an unsubscribe function.
   on(fn) { listeners.add(fn); return () => listeners.delete(fn); },
 
+  /** Write the persisted settings now (normally debounced automatically after set()). */
   save() {
+    clearTimeout(saveTimer);
+    saveTimer = 0;
     try {
       const obj = {};
       for (const k of PERSIST) obj[k] = this[k];
@@ -76,6 +117,12 @@ export const state = {
     } catch { /* storage may be unavailable */ }
   },
 };
+
+if (typeof window !== 'undefined') {
+  const flush = () => { if (saveTimer) state.save(); };
+  window.addEventListener('pagehide', flush);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
+}
 
 // Lightweight global event bus for one-off notifications
 // (e.g. 'placed', 'removed', 'toast', 'blueprint-progress').

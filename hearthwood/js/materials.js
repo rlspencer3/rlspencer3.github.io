@@ -1347,6 +1347,24 @@ function applyGlow(m) {
   if (u.opNight !== undefined) m.opacity = u.opDay + (u.opNight - u.opDay) * night;
 }
 
+// Winter snow on roofs: roofing materials whiten their upward-facing texels (after the normal map, so
+// shingle butts and seams stay visible; steep roofs hold less snow). One shared uniform, one shared
+// onBeforeCompile (→ one cached program per material type); costs a branch when there is no snow.
+const SNOW = { value: 0 };
+function snowCompile(shader) {
+  shader.uniforms.uSnow = SNOW;
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', '#include <common>\nuniform float uSnow;')
+    .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+	if ( uSnow > 0.0 ) {
+		float hwS = uSnow * 0.84 * smoothstep( 0.5, 0.87, inverseTransformDirection( normal, viewMatrix ).y );
+		float hwL = dot( diffuseColor.rgb, vec3( 0.3, 0.59, 0.11 ) );
+		diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.86, 0.89, 0.94 ) * ( 0.9 + 0.25 * min( hwL, 0.6 ) ), hwS );
+		roughnessFactor = mix( roughnessFactor, 0.8, hwS );
+		metalnessFactor = mix( metalnessFactor, 0.0, hwS );
+	}`);
+}
+
 function applySeason(m, id) {
   if (id === 'grass') { m.color.set(GRASS_TINT[season] || MATERIALS.grass.color); return; }
   const t = getTex((id === 'leavesDark' ? 'needles' : 'leaves') + ':' + season);
@@ -1382,6 +1400,7 @@ export function mat(id, color = null) {
   if (s.glass && s.glass.night !== s.glass.day) { m.userData.opDay = s.glass.day; m.userData.opNight = s.glass.night; }
   if (s.glow || m.userData.opNight !== undefined) { applyGlow(m); glowMats.push(m); }
   if (s.season) { seasonMats.push([def.id, m]); applySeason(m, def.id); }
+  if (def.group === 'roof') m.onBeforeCompile = snowCompile;
   cache.set(key, m);
   return m;
 }
@@ -1393,11 +1412,22 @@ export function setNight(f) {
 }
 export const getNight = () => night;
 
-/** Season tint for foliage & grass: 'spring' | 'summer' | 'autumn' | 'winter'. */
+/** Season tint for foliage & grass (and winter snow on roofing): 'spring' | 'summer' | 'autumn' | 'winter'. */
 export function setSeason(s) {
   if (!SEASONS.includes(s) || s === season) return;
   season = s;
+  SNOW.value = s === 'winter' ? 1 : 0;
   for (const [id, m] of seasonMats) applySeason(m, id);
+}
+
+/**
+ * Run fn with roof snow switched off (e.g. palette thumbnails, which should show the roofing itself).
+ * The snow uniform is read at render time, so wrap the render call: withoutSnow(() => renderer.render(…)).
+ */
+export function withoutSnow(fn) {
+  const v = SNOW.value;
+  SNOW.value = 0;
+  try { return fn(); } finally { SNOW.value = v; }
 }
 
 const ghostCache = {};

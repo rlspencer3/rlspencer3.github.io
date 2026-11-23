@@ -13,7 +13,8 @@ hearthwood/
   js/catalog.js         piece registry + categories            (core)
   js/geom.js            cached geometry helpers (meter UVs)     (core)
   js/materials.js       material library, textures, night glow, seasons
-  js/world.js           placed pieces, undo/redo, save/load     (core)
+  js/world.js           placed pieces, undo/redo, save/load, template cache   (core)
+  js/batcher.js         static batching: merges settled pieces into ~1 mesh per material   (core)
   js/camera.js          orbit camera + touch gestures          (core)
   js/builder.js         placement controller (tools, ghost, auto-roof, auto-gable)  (core)
   js/effects.js         pop-in tweens, dust puffs              (core)
@@ -29,6 +30,8 @@ hearthwood/
   js/ui.js              all DOM UI
   js/blueprints.js      house templates, guided build mode, stamping
   tools/shot.mjs        headless screenshot / test runner
+  tools/batch-regress.mjs  static-batching regression test (node tools/batch-regress.mjs, ~6 min, exit 1 on failure)
+  sw.js                 service worker (network-first, offline cache) — add every new module to its CORE list
 ```
 
 ## Visual style (all modules)
@@ -107,6 +110,8 @@ The world positions a wrapper group; `build()` returns geometry in LOCAL coordin
 * **corner**: origin = vertex at `levelY(y)`.
 
 Ground-standing edge pieces (fences, hedges) at level 0 should start at local `y = -BASE_Y`.
+A level-0 wall with no foundation, floor or deck on either side gets a stone footing down to the ground (its
+cache key gains `|g`); pieces built off the lot (palette thumbnails at x = 500) never get one.
 
 ### Roofs
 
@@ -116,7 +121,8 @@ Ground-standing edge pieces (fences, hedges) at level 0 should start at local `y
   * `corner` (outer hip corner): height at local (u, v) ∈ [−1,1]² is `rise * min((u+1)/2, (v+1)/2)`
     — low along local −X and −Z edges, peak at the (+X, +Z) corner.
   * `inner` (valley corner): `rise * max((u+1)/2, (v+1)/2)` — low only at the (−X, −Z) corner point.
-  * `flat`: rise 0. `cap`: a self-contained top piece (e.g. pyramid), rise as declared.
+  * `flat`: rise 0. `cap`: a self-contained top piece (e.g. pyramid), rise as declared. `roof_pyramid` is contextual:
+    sides that meet another roof panel join it (no eave / top boards there); only open sides get an overhang.
 * The builder auto-stacks: a slope placed uphill of another slope with the same `r` starts where that one ends;
   corners stack diagonally. Users can nudge with roof ▲▼ (`state.hOffset`).
 * Roof visibility follows `p.y` (the level the roof was built from), so a whole roof hides together.
@@ -165,16 +171,24 @@ registerPiece({
   Never dispose geometry or materials (they are shared).
 * Use `mat(id, colour)` from materials.js for every material.
 * The world merges meshes by material automatically (`mergeByMaterial`). Mark a mesh `userData.noMerge = true`
-  only if it must stay separate.
+  only if it must stay separate. Settled pieces are then drawn by the static batcher (see *Static batching*):
+  transparent materials, `noMerge` meshes, meshes with a non-zero `renderOrder`, custom `onBeforeRender`, extra
+  vertex attributes or mirrored transforms are never batched. Never use layers 1 or 2 on piece meshes.
 * Budget: typical piece ≤ ~1.5k triangles, big decor (trees) ≤ ~3k. Fewer distinct materials per piece = fewer draw calls.
 * Builds must be deterministic (no Math.random without a seed derived from the record), because templates are cached.
+* A piece's world object is `wrapper Group → [template clone]` (`entry.obj.children[0]` is the whole look). Don't
+  add children to `entry.obj`; anything that animates it outside world mutations must use effects tweens or call
+  `world.batcher.wake(entry.obj)` first (scale ≠ 1 and effects tweens are detected automatically).
 
 ## Materials (js/materials.js)
 
 `mat(id, colour?)` → cached `THREE.Material`. `MATERIALS[id] = { id, name, group, paintable, color, swatch }`.
 Groups shown in pickers: `wall`, `roof`, `floor`, `trim`. Group `misc` is for internal use (glass, leaves, …).
 `PALETTE` = paint colours. `setNight(f)` (0 day → 1 night) drives glow of `windowGlass`, `lampGlow`, `ember`.
-`setSeason(s)` tints `leaves`, `grass`. `ghostMat(valid)`, `blueprintMat(highlight)` for previews.
+`setSeason(s)` tints `leaves`, `grass`, and in winter puts snow on every `roof`-group material (one shared shader
+uniform). `withoutSnow(fn)` runs `fn` (e.g. a render call) with the snow switched off — palette thumbnails use it.
+`ghostMat(valid)`, `blueprintMat(highlight)` for previews. Materials are shared and mutated in place by night /
+season changes: never clone them per piece (the batcher relies on the same object being used everywhere).
 
 Texture UVs are in **meters**. Texture periods: walls 2 m horizontally and 1.25 m or 2.5 m vertically
 (clapboard boards are 0.25 m), floors 2 m × 2 m (planks run along local X), roofs 1 m × 1 m containing exactly
@@ -186,15 +200,16 @@ Texture UVs are in **meters**. Texture periods: walls 2 m horizontally and 1.25 
 `level`, `rot`, `hOffset`, `drawMode`, `seeAll`, `mats` (matGroup → material id), `colors` (material id → colour),
 `accent`, `paintMat`, `paintColor`, `paintTarget` ('main'|'accent'), `time` (0..1, 0.5 = noon), `timeFlow`,
 `season`, `weather` ('clear'|'rain'|'snow'|'leaves'), `sound`, `music`, `shadows`, `quality` ('low'|'high'|'auto'),
-`photoMode`, `blueprint`, `slot`. Settings persist in localStorage. Replace objects (`mats`, `colors`) — don't mutate.
+`photoMode`, `blueprint`, `slot`. Settings persist in localStorage (validated on load; writes debounced to at most one
+per 600 ms and flushed on `pagehide` / hidden; `state.save()` writes now). Replace objects (`mats`, `colors`) — don't mutate.
 
 Event bus `events.emit(type, detail)` / `events.on(type, fn)`:
-* `world-change` {kind: 'add'|'remove'|'clear'|'load'|'undo'|'redo', p, prev, count}
+* `world-change` {kind: 'add'|'remove'|'clear'|'load'|'undo'|'redo', p, prev, count} (`discardLast()` reports 'undo')
 * `placed` {p, def, replaced}
 * `sfx` {name, flavor} — names: place, replace, remove, paint, rotate, click, undo, level, error, success, open, close, camera, blueprint-step, blueprint-done
-* `toast` {text, kind?: 'info'|'warn'|'success', ms?}
+* `toast` {text, kind?: 'info'|'warn'|'success', ms?} — also sent once by storage.js when an autosave can't be written
 * `blueprint-progress` {id, done, total, stage, stageName}
-* `history` {canUndo, canRedo} — after a batch (blueprint stamp, draw stroke) or a load changes the undo stacks
+* `history` {canUndo, canRedo} — after a batch (blueprint stamp, draw stroke), a load or `discardLast()` changes the undo stacks
 * `ready` (app)
 
 ## App object (window.__hw, passed to every module's `init(app)`)
@@ -209,25 +224,96 @@ Feature modules export `init(app)` returning an object (optionally with `update(
   tweens, light movement and every 12 frames. Anything else that animates shadow-casting objects should set
   `renderer.shadowMap.needsUpdate = true`.
 * `audio.js` → `{ update(dt) }` — listens to `sfx` events and state.
-* `blueprints.js` → `{ list(), get(id), startGuided(id), stop(), stamp(id, {animate, record}), welcome(), update(dt), active() }`
+* `blueprints.js` → `{ list(), get(id), startGuided(id), stop(), stamp(id, {animate, record}), welcome(), update(dt), active(),
+  selectNext({focus, quiet}), progress(), stages }`. An animated stamp keeps waiting pieces at scale 0.001 with their
+  inner group (`entry.obj.children[0]`) hidden until their pop-in (no draw calls; `entry.obj.visible` stays the
+  level cutaway's). In guided mode `selectNext` turns the camera to face a piece that is on the far side of the house.
 * `ui.js` → `{ update(dt), toast, open(page), close, showWelcome, ask }`.
 * `app.welcomeLot` — `world.version` right after the first-visit scenery lot was placed (unchanged version ⇒ only scenery).
 
-World API: `add(rec, {record}) → entry|null`, `remove(key)`, `update(key, patch)`, `get(key)`, `entry(key)`, `keyOf(rec)`,
-`normalize(rec)`, `validate(rec)`, `clear()`, `load(data)`, `serialize()`, `undo()`, `redo()`, `canUndo()`, `canRedo()`,
-`beginBatch()/endBatch()`, `buildPlaced(rec)`, `signature(rec)` (template-cache key), `setView(level, seeAll)`,
+World API: `new World(scene, { batch: false | batcherOptions })` (one-argument form still works; batching is on by default).
+`add(rec, {record}) → entry|null`, `remove(key)`, `update(key, patch)`, `get(key)`, `entry(key)`, `keyOf(rec)`,
+`normalize(rec)` (null for anything that isn't a record of a known type), `validate(rec)`, `clear()`, `load(data)`,
+`serialize()`, `undo()`, `redo()`, `discardLast()` (revert the last undo step without making it a redo — for gestures
+that turned out to be accidental), `canUndo()`, `canRedo()`, `beginBatch()/endBatch()` (endBatch → true when it pushed an undo step), `buildPlaced(rec)`,
+`buildLocal(rec)`, `signature(rec)` (template-cache key), `setView(level, seeAll)`, `pick(raycaster)`,
+`tick(dt)` (called by main.js every frame; returns true when shadow maps must be refreshed), `batcher`,
+`onRemount(from, to)` (hook: a piece's object was rebuilt in place — main.js moves its tweens),
 `entries` (Map key → {key, p, def, obj, level}), `count`, `version` (bumps on every change).
-`load(data, {record: true})` is a single undo step.
+`load(data, {record: true})` is a single undo step; a non-recorded load resets both undo stacks and any open batch.
+Unknown / malformed records in `load` data are skipped.
+
+Template cache: `world.templates` (signature → merged template) is **read-only** for other modules. Templates used by
+placed pieces are kept; unused ones stay for quick reuse up to `world.maxIdleTemplates` (160, least recently used
+first) and are then disposed (on the next world change or frame). Objects from `buildPlaced` / `buildLocal` share
+their template's geometry: keep them only while they are shown (ghosts), never dispose their geometry.
+
+### Static batching (js/batcher.js, `world.batcher`)
+
+Settled pieces are drawn by merged meshes: one **render unit** per (shared material, receiveShadow, shadow mode) for
+the whole lot (split into lot quadrants past ~131k vertices) and one position-only **shadow proxy** per 8×8-cell region.
+The farmhouse frame costs ~130 draw calls in total instead of ~650 (~1,250 on frames that redraw shadows).
+
+* Batches live in the scene group `world-batches`, never inside `world.root`. The pieces' own meshes stay in
+  `world.root` but move to **layer 1** (`LAYER_BAKED`: never rendered, still pickable — `world.pick` enables it on its
+  raycaster). Shadow proxies use **layer 2** (`LAYER_SHADOW`), which the batcher enables on every shadow camera.
+  Layers 1 and 2 are reserved: don't use them for anything else; raycast pieces through `world.pick` / `builder.pickPiece`.
+* Vertices are sorted by level, so `setView` cutaways only shorten the draw range.
+* Any change punches the piece out of its batches at once (it renders on its own on layer 0, so pop-in / pop-out and
+  paint show immediately); touched units rebake time-sliced (≤ 6 ms/frame, 4 ms on touch devices) after 0.5 s of quiet
+  and once no piece in them is scaled or tweening.
+* API: `wake(obj)` (render on its own now — call before animating `entry.obj` yourself), `flush()` (bake without the
+  quiet period), `bakeNow()` (synchronous, tests), `isBaked(entry)`, `unitsOf(entry)`, `stats()`, `setEnabled(b)`.
+* Dev params: `?batch=0` off, `?batchsize=n` shadow-region edge in cells, `?batchglass=1` also merge glass.
+
+### Camera (js/camera.js, `app.rig`)
+
+`setView({t:[x,y,z], th, ph, r}, immediate)` (malformed / non-finite views are ignored; target, `ph` and `r` are clamped
+to the rig's `bounds`, `minPhi..maxPhi`, `minRadius..maxRadius`), `getView()`, `focus(x, y, z, radius?)`, `snap()`,
+`rotateBy(dθ)`, `zoomBy(f)`, `setTargetY(y)`, `setInsets(top, bottom, left, right)` (px of the canvas covered by UI: the
+view is centred in the free area with an eased view offset), `goal` ({target, theta, phi, radius} the view eases to),
+`busy`, `drawMode`. Optional callbacks: `onTap(x, y, e)`, `onHover(x, y)`, `onDrawStart/Move/End(x, y)`, `onDrawCancel()`,
+`onGestureStart()`, `onPress(x, y, type)`, `onAimStart/onAimMove(x, y)`, `onAimEnd(x, y, cancelled)`, `pickPoint(x, y)`
+(pinch / slide pivot), `orbitPoint(x, y)` (twist / orbit pivot). Touch: tap = action, press-and-hold 450 ms = aim
+(preview follows the finger, lift to place, lift over the UI to cancel), 1-finger drag = orbit (or draw), 2 fingers =
+pinch / twist / slide anchored under the fingers; a second finger soon after a stroke starts cancels the stroke.
+
+### Effects (js/effects.js, `app.effects`)
+
+`popIn(obj, d)`, `popOut(obj, done, d)` (an object with no parent, e.g. a piece just removed from the world, is shown
+in the scene for the animation), `isAnimating(obj)`, `retarget(from, to)`, `puff(pos, color, count, spread)`,
+`sparkle(pos, color, count)`, `tweens` (read by the batcher).
+
+### Storage (js/storage.js, `app.storage`)
+
+Every load path (autosave, slots, share codes) goes through `sanitize(data)`, which never throws: typed / bounded
+fields, `#rgb`/`#rrggbb` colours, a checked `cam`, at most `MAX_PIECES` (the lot's slot count) records. Loaded data may
+carry `dropped` (records rejected); the UI tells the player. Share codes `HW1:` (deflate-raw, decoded by a capped pure-JS
+`inflateRaw`) and `HW0:`; `importCode(text)` finds a code inside pasted text and never rejects.
+
+### Builder (js/builder.js, `app.builder`)
 
 Builder API: `rotate(dir)`, `raise(d)`, `setLevel(n)`, `selectPiece(id)`, `undo()`, `redo()`, `place(rec, opts)`,
-`resolve(sx, sy)`, `hideGhost()`.
+`resolve(sx, sy)`, `hideGhost()`, `pickPiece(sx, sy)`, `pointAt(sx, sy)` (world point under the pointer: a piece, else
+the active level's plane), `orbitAt(sx, sy)` (middle of the building under the pointer, or null), `autoRoofHeight(def, x,
+z, r, level)`, `autoGable(def, p)`, `eraseAt / paintAt / pickAt(sx, sy)`, `drawStart / drawMove / drawEnd / drawCancel`.
+`resolve` tries, in order: blueprint guides (guided mode: taps snap to a glowing guide; off-guide taps for pieces that
+still have guides are rejected with a hint), gables (snap to the open roof end pointed at, on any floor), the piece under
+the pointer (windows / doors also swap walls on other visible floors), then the grid. Roof pieces settle on top of the
+walls under the pointer whatever floor is active (fixed for the length of a draw stroke).
 
 ## Dev tools
 
-* `?showcase=<category|all>` lays out every piece of a category in every material (rows = pieces, columns = materials) at level 0
-  starting at cell (−9, −9), 2 cells apart.
+* `?showcase=<category>` lays out every piece of a category in every material (rows = pieces, columns = materials) at level 0
+  starting at cell (−9, −9), 2 cells apart; a category with more than 10 pieces wraps into side-by-side blocks of
+  10 rows (centred on the lot). `?showcase=all` is a contact sheet: every piece once (default material), 10 per row,
+  2 cells apart, all on the lot. The camera frames the layout.
 * `?clean=1` start empty · `?nosave=1` don't autosave · `?ui=0` no UI · `?bp=<id>` stamp a blueprint ·
-  `?time=0.8` · `?season=winter` · `?level=1` · `?seeAll=1` · `?cam=theta,phi,radius,tx,ty,tz`.
+  `?time=0.8` · `?season=winter` · `?weather=rain` · `?level=1` · `?seeAll=1` · `?cam=theta,phi,radius,tx,ty,tz` ·
+  `?welcome=1` show the welcome card · `?thumbs=0` no blueprint pictures · `?batch=0|batchsize=n|batchglass=1` (batching).
+  Invalid values are ignored (level is clamped to 0..MAX_LEVEL).
 * `node tools/shot.mjs --query "showcase=walls&ui=0" --out /path/shot.png [--w 1280 --h 800] [--mobile] [--cam …]
-  [--eval "js"] [--script file.js] [--wait ms]` — serves the game, screenshots it, prints console errors, piece count,
+  [--eval "js"] [--script file.js] [--wait ms] [--mobile --landscape]` — serves the game, screenshots it, prints console errors, piece count,
   draw calls & triangles. `--script` bodies run inside an async function in the page and may `return` a value.
+* `node tools/batch-regress.mjs` — static-batching regression (stamp/erase/paint/undo/levels/pick/touch, batched vs
+  unbatched pixel comparison, draw-call ratio). Exits 1 on failure.

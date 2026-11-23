@@ -572,11 +572,19 @@ export function init(app) {
   let anim = null;   // { keys: [{key, t}], i, time, lastSfx, n }
   let muted = false; // true while stamping (one refresh afterwards instead of one per piece)
 
+  // A piece waiting for its pop-in keeps scale 0.001 (so the batcher leaves it alone) AND has its inner group
+  // hidden, so it costs no draw calls meanwhile (the farmhouse cascade drew ~1,270 calls a frame otherwise).
+  // Only the inner group is touched: entry.obj.visible belongs to the level cutaway (world.setView).
+  function waitHidden(e, hidden) {
+    const inner = e.obj.children[0];
+    if (inner) inner.visible = !hidden;
+  }
+
   function finishAnim() {
     if (!anim) return;
     for (let i = anim.i; i < anim.keys.length; i++) {
       const e = world.entry(anim.keys[i].key);
-      if (e) e.obj.scale.setScalar(1);
+      if (e) { e.obj.scale.setScalar(1); waitHidden(e, false); }
     }
     anim = null;
   }
@@ -602,7 +610,7 @@ export function init(app) {
       const D = clamp(0.9 + placed.length * 0.008, 1.5, 2.4);
       const keys = placed.map((key, i) => {
         const e = world.entry(key);
-        if (e) e.obj.scale.setScalar(0.001);
+        if (e) { e.obj.scale.setScalar(0.001); waitHidden(e, true); }
         return { key, t: 0.15 + (D * i) / placed.length };
       });
       anim = { keys, i: 0, time: 0, lastSfx: -1, n: 0 };
@@ -622,6 +630,7 @@ export function init(app) {
       const k = a.keys[a.i++];
       const e = world.entry(k.key);
       if (!e) continue;
+      waitHidden(e, false);
       effects.popIn(e.obj, 0.32);
       a.n++;
       if (a.time - a.lastSfx > 0.11) {
@@ -736,6 +745,12 @@ export function init(app) {
   function stop() {
     if (!guide) return;
     scene.remove(guide.group);
+    // ghost geometries are made for this guide only (a whole blueprint's worth is several MB): free them
+    const geos = new Set(ghostGeos.values());
+    for (const m of guide.group.children) if (m.geometry) geos.add(m.geometry);
+    for (const g of geos) g.dispose();
+    ghostGeos.clear();
+    guide.group.clear();
     guide = null;
     hiMat.emissiveIntensity = hiBase;
     if (state.blueprint) state.set({ blueprint: null });
@@ -878,6 +893,14 @@ export function init(app) {
     else if (def.slot === 'edge') pos.y += LEVEL_H * 0.4;
     if (focus) {
       const f = fit();
+      // a piece on the far side of the house would be hidden behind it: swing round to face it when it is
+      // more than ~70° away from the view direction (measured from the blueprint's centre, short way round)
+      const c = g.bp.cam.t, dx = pos.x - c[0], dz = pos.z - c[2];
+      if (dx * dx + dz * dz > 4) {
+        let d = Math.atan2(dx, dz) - rig.goal.theta;
+        d = Math.atan2(Math.sin(d), Math.cos(d));
+        if (Math.abs(d) > 1.2) rig.goal.theta += d;
+      }
       rig.focus(pos.x, Math.max(1, pos.y), pos.z, clamp(rig.goal.radius, 13 * f, 28 * f));
       if (!quiet) events.emit('sfx', { name: 'click' });
     }

@@ -1,15 +1,31 @@
 // Orbit camera rig with mobile-first gestures.
-//   Touch:  1 finger drag = orbit (or draw in draw mode) · tap = action
-//           2 fingers = pinch zoom + pan + twist to rotate
-//   Mouse:  left drag = orbit (or draw) · right/middle drag or shift+drag = pan · wheel = zoom · click = action
-// Emits callbacks: onTap(x, y), onHover(x, y), onDrawStart/Move/End(x, y), onGestureStart().
+//   Touch:  tap = action · press & hold = aim (preview follows the finger, lift to place, lift over the UI to cancel)
+//           1 finger drag = orbit around what's under the screen centre (or draw in draw mode)
+//           2 fingers = pinch zoom / twist / slide, all anchored on the point between the fingers
+//   Mouse:  left drag = orbit (or draw) · right/middle drag or shift+drag = pan · wheel = zoom toward the cursor · click = action
+// Callbacks (all optional): onTap(x, y, e), onHover(x, y), onDrawStart/Move/End(x, y), onGestureStart(),
+//   onPress(x, y, type)      a single pointer went down (touch preview)
+//   onAimStart/onAimMove(x, y), onAimEnd(x, y, cancelled)    press-and-hold aiming (touch / pen)
+//   onDrawCancel()           a draw stroke turned out to be the start of a two-finger gesture
+//   pickPoint(x, y) → THREE.Vector3 | null     world point under a screen position (pinch / slide pivot)
+//   orbitPoint(x, y) → THREE.Vector3 | null    point to turn around for what's under (x, y), e.g. the middle of a house
 
 import * as THREE from 'three';
 import { clamp } from './config.js';
 
 const TAP_MOVE_TOUCH = 10;
 const TAP_MOVE_MOUSE = 5;
-const TAP_TIME = 450;
+const AIM_MS = 450;             // hold this long without moving to start aiming (a long-press)
+const DRAW_GRACE_MS = 350;      // a second finger within this time of a stroke start cancels the stroke…
+const DRAW_GRACE_PX = 64;       // …or before the first finger has travelled this far
+
+const _ray = new THREE.Raycaster();
+const _ndc = new THREE.Vector2();
+const _plane = new THREE.Plane();
+const _n = new THREE.Vector3(0, 1, 0);
+const _a = new THREE.Vector3();
+const _b = new THREE.Vector3();
+const _d = new THREE.Vector3();
 
 export class CameraRig {
   constructor(camera, dom) {
@@ -30,11 +46,21 @@ export class CameraRig {
     this.targetY = 1;
 
     this.onTap = null; this.onHover = null;
-    this.onDrawStart = null; this.onDrawMove = null; this.onDrawEnd = null;
-    this.onGestureStart = null;
+    this.onDrawStart = null; this.onDrawMove = null; this.onDrawEnd = null; this.onDrawCancel = null;
+    this.onGestureStart = null; this.onPress = null;
+    this.onAimStart = null; this.onAimMove = null; this.onAimEnd = null;
+    this.pickPoint = null;
+    this.orbitPoint = null;
 
     this.pointers = new Map();
-    this.mode = 'idle'; // idle | pending | orbit | pan | draw | multi | wait
+    this.mode = 'idle'; // idle | pending | orbit | pan | draw | aim | multi | wait
+    this._aimTimer = 0;
+    this._drawT = 0;
+    this.multi = { dist: 1, angle: 0, mx: 0, my: 0, pivot: new THREE.Vector3(), turn: new THREE.Vector3() };
+    // screen pixels covered by UI chrome (top bar, bottom tray): the view is shifted so the orbit target sits
+    // in the middle of what you can actually see, not behind the tray
+    this.insets = { top: 0, bottom: 0, left: 0, right: 0 };
+    this._ofs = 0; this._ofx = 0; this._vw = 0; this._vh = 0; this._asp = 0;
     this._bind();
   }
 
@@ -49,7 +75,8 @@ export class CameraRig {
       e.preventDefault();
       if (!this.enabled) return;
       const f = Math.exp(clamp(e.deltaY, -120, 120) * 0.0015);
-      this.goal.radius = clamp(this.goal.radius * f, this.minRadius, this.maxRadius);
+      const p = this._local(e);
+      this._zoomAbout(f, this._pivotAt(p.x, p.y, _a) ? _a : null);
     }, { passive: false });
     d.addEventListener('contextmenu', (e) => e.preventDefault());
     d.addEventListener('pointerleave', () => { if (this.onHover && this.mode === 'idle') this.onHover(null, null); });
@@ -60,6 +87,36 @@ export class CameraRig {
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
+  // ---------------------------------------------------------------- picking helpers
+
+  _rayAt(sx, sy) {
+    const w = this.dom.clientWidth || 1, h = this.dom.clientHeight || 1;
+    _ndc.set((sx / w) * 2 - 1, -(sy / h) * 2 + 1);
+    _ray.setFromCamera(_ndc, this.camera);
+    return _ray.ray;
+  }
+
+  /** Point on the horizontal plane at height y under a screen position (null if the ray misses it). */
+  _planeAt(sx, sy, y, out) {
+    const ray = this._rayAt(sx, sy);
+    _plane.set(_n, -y);
+    const hit = ray.intersectPlane(_plane, out);
+    if (!hit) return null;
+    // ignore near-horizon hits: they explode with tiny finger moves
+    if (hit.distanceTo(ray.origin) > this.maxRadius * 2.5) return null;
+    return hit;
+  }
+
+  /** World point a gesture should pivot on: the piece / ground under the screen point, else the target plane. */
+  _pivotAt(sx, sy, out) {
+    let p = null;
+    try { p = this.pickPoint?.(sx, sy) || null; } catch { p = null; }
+    if (p && p.distanceTo(this.camera.position) <= this.maxRadius * 1.5) return out.copy(p);
+    return this._planeAt(sx, sy, this.goal.target.y, out);
+  }
+
+  // ---------------------------------------------------------------- pointer handling
+
   _down(e) {
     if (!this.enabled) return;
     this.dom.setPointerCapture?.(e.pointerId);
@@ -67,22 +124,50 @@ export class CameraRig {
     this.pointers.set(e.pointerId, { ...pos, sx: pos.x, sy: pos.y, t: performance.now(), type: e.pointerType, button: e.button, shift: e.shiftKey });
     if (this.pointers.size === 1) {
       if (e.pointerType === 'mouse' && (e.button === 1 || e.button === 2 || e.shiftKey)) this.mode = 'pan';
-      else this.mode = 'pending';
+      else {
+        this.mode = 'pending';
+        if (e.pointerType !== 'mouse') {
+          this.onPress?.(pos.x, pos.y, e.pointerType);
+          clearTimeout(this._aimTimer);
+          const id = e.pointerId;
+          this._aimTimer = setTimeout(() => this._startAim(id), AIM_MS);
+        }
+      }
     } else if (this.pointers.size === 2) {
-      if (this.mode === 'draw') this.onDrawEnd?.(pos.x, pos.y);
+      clearTimeout(this._aimTimer);
+      if (this.mode === 'draw') {
+        // a pinch whose first finger slid a little: undo the accidental stroke instead of keeping it
+        const first = [...this.pointers.values()][0];
+        const travel = first ? Math.hypot(first.x - first.sx, first.y - first.sy) : 0;
+        if ((performance.now() - this._drawT < DRAW_GRACE_MS || travel < DRAW_GRACE_PX) && this.onDrawCancel) this.onDrawCancel();
+        else this.onDrawEnd?.(pos.x, pos.y);
+      } else if (this.mode === 'aim') this.onAimEnd?.(pos.x, pos.y, true);
       this.mode = 'multi';
       this._initMulti();
       this.onGestureStart?.();
     }
   }
 
+  _startAim(id) {
+    const ptr = this.pointers.get(id);
+    if (!ptr || this.mode !== 'pending' || this.pointers.size !== 1 || !this.enabled) return;
+    if (this.drawMode) return;          // in draw mode a held finger simply starts the stroke when it moves
+    this.mode = 'aim';
+    this.onAimStart?.(ptr.x, ptr.y);
+  }
+
   _initMulti() {
     const [a, b] = [...this.pointers.values()];
-    this.multi = {
-      dist: Math.hypot(a.x - b.x, a.y - b.y) || 1,
-      angle: Math.atan2(b.y - a.y, b.x - a.x),
-      mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2,
-    };
+    const m = this.multi;
+    m.dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    m.angle = Math.atan2(b.y - a.y, b.x - a.x);
+    m.mx = (a.x + b.x) / 2; m.my = (a.y + b.y) / 2;
+    m.hasPivot = !!this._pivotAt(m.mx, m.my, m.pivot);
+    // twisting turns the house about its middle (not about the wall face under the fingers)
+    let t = null;
+    try { t = this.orbitPoint?.(m.mx, m.my) || null; } catch { t = null; }
+    if (t) m.turn.copy(t); else if (m.hasPivot) m.turn.copy(m.pivot);
+    m.hasTurn = !!(t || m.hasPivot);
   }
 
   _move(e) {
@@ -100,13 +185,16 @@ export class CameraRig {
       const moved = Math.hypot(pos.x - ptr.sx, pos.y - ptr.sy);
       const lim = ptr.type === 'mouse' ? TAP_MOVE_MOUSE : TAP_MOVE_TOUCH;
       if (moved > lim) {
+        clearTimeout(this._aimTimer);
         if (this.drawMode && (ptr.type !== 'mouse' || ptr.button === 0)) {
           this.mode = 'draw';
+          this._drawT = performance.now();
           this.onDrawStart?.(ptr.sx, ptr.sy);
           this.onDrawMove?.(pos.x, pos.y);
         } else {
           this.mode = 'orbit';
           this.onGestureStart?.();
+          this._reanchor();
         }
       } else if (ptr.type === 'mouse') {
         this.onHover?.(pos.x, pos.y);
@@ -120,19 +208,24 @@ export class CameraRig {
       this._pan(dx, dy);
     } else if (this.mode === 'draw') {
       this.onDrawMove?.(pos.x, pos.y);
+    } else if (this.mode === 'aim') {
+      this.onAimMove?.(pos.x, pos.y);
     } else if (this.mode === 'multi' && this.pointers.size >= 2) {
       const [a, b] = [...this.pointers.values()];
       const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
       const angle = Math.atan2(b.y - a.y, b.x - a.x);
       const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
       const m = this.multi;
-      this.goal.radius = clamp(this.goal.radius * (m.dist / dist), this.minRadius, this.maxRadius);
+      const piv = m.hasPivot ? m.pivot : null;
+      // slide: keep the ground under the fingers under the fingers
+      this._grab(m.mx, m.my, mx, my, piv ? piv.y : this.goal.target.y);
+      // pinch: zoom about the point between the fingers
+      this._zoomAbout(m.dist / dist, piv);
+      // twist: turn the view around that point
       let da = angle - m.angle;
       if (da > Math.PI) da -= Math.PI * 2;
       if (da < -Math.PI) da += Math.PI * 2;
-      this.goal.theta -= da;
-      this._pan(mx - m.mx, my - m.my);
-      // vertical two-finger slide also tilts a little when fingers move together
+      this._turnAbout(-da, m.hasTurn ? m.turn : null);
       m.dist = dist; m.angle = angle; m.mx = mx; m.my = my;
     }
   }
@@ -141,10 +234,19 @@ export class CameraRig {
     const ptr = this.pointers.get(e.pointerId);
     if (!ptr) return;
     this.pointers.delete(e.pointerId);
+    clearTimeout(this._aimTimer);
     const pos = this._local(e);
     if (this.mode === 'pending' && !cancelled) {
-      const dt = performance.now() - ptr.t;
-      if (dt < TAP_TIME && (ptr.type !== 'mouse' || ptr.button === 0)) this.onTap?.(pos.x, pos.y, e);
+      if (ptr.type !== 'mouse' || ptr.button === 0) this.onTap?.(pos.x, pos.y, e);
+      this.mode = 'idle';
+    } else if (this.mode === 'pending' && cancelled) {
+      this.onGestureStart?.();
+      this.mode = 'idle';
+    } else if (this.mode === 'aim') {
+      // lifting over the UI (or off the screen) cancels
+      const el = document.elementFromPoint?.(e.clientX, e.clientY);
+      const off = cancelled || (el && el !== this.dom);
+      this.onAimEnd?.(pos.x, pos.y, !!off, e);
       this.mode = 'idle';
     } else if (this.mode === 'draw') {
       this.onDrawEnd?.(pos.x, pos.y);
@@ -156,6 +258,76 @@ export class CameraRig {
       this.mode = 'idle';
     }
     if (this.pointers.size === 0) this.mode = 'idle';
+  }
+
+  // ---------------------------------------------------------------- camera moves
+
+  /** Move the orbit pivot onto (the middle of) whatever is under the view centre without moving the camera. */
+  _reanchor() {
+    if (!this.orbitPoint) return;
+    const w = this.dom.clientWidth, h = this.dom.clientHeight;
+    let p = null;
+    try { p = this.orbitPoint(w / 2 - this._ofx, h / 2 - this._ofs); } catch { p = null; }
+    if (!p) return;
+    _b.copy(p);
+    const d = _b.distanceTo(this.camera.position);
+    if (d < this.minRadius || d > this.maxRadius) return;
+    if (Math.abs(_b.x) > this.bounds || Math.abs(_b.z) > this.bounds || _b.y < -1) return;
+    // keep any motion still in flight (goal − current) on top of the new anchor
+    _d.copy(this.goal.target).sub(this.target);
+    const rr = this.goal.radius / (this.radius || 1);
+    this.target.copy(_b);
+    this.radius = d;
+    this.goal.target.copy(_b).add(_d);
+    this.goal.radius = clamp(d * rr, this.minRadius, this.maxRadius);
+    this._apply();
+  }
+
+  /** Zoom by factor f (<1 = closer). With a pivot, the pivot stays put on screen. */
+  _zoomAbout(f, pivot) {
+    const g = this.goal;
+    const r = clamp(g.radius * f, this.minRadius, this.maxRadius);
+    const k = r / g.radius;
+    if (pivot && k !== 1) {
+      g.target.sub(pivot).multiplyScalar(k).add(pivot);
+      this._clampTarget();
+    }
+    g.radius = r;
+  }
+
+  /** Turn the view by dTheta about a vertical axis through pivot (or the target). */
+  _turnAbout(dTheta, pivot) {
+    if (!dTheta) return;
+    const g = this.goal;
+    g.theta += dTheta;
+    if (pivot) {
+      const x = g.target.x - pivot.x, z = g.target.z - pivot.z;
+      const c = Math.cos(dTheta), s = Math.sin(dTheta);
+      g.target.x = pivot.x + x * c + z * s;
+      g.target.z = pivot.z - x * s + z * c;
+      this._clampTarget();
+    }
+  }
+
+  /** Two-finger slide: move the target so the plane point under (x0,y0) ends up under (x1,y1). */
+  _grab(x0, y0, x1, y1, planeY) {
+    if (x0 === x1 && y0 === y1) return;
+    const p0 = this._planeAt(x0, y0, planeY, _a);
+    const p1 = p0 && this._planeAt(x1, y1, planeY, _b);
+    if (!p0 || !p1) { this._pan(x1 - x0, y1 - y0); return; }
+    _d.copy(p0).sub(p1);
+    _d.y = 0;
+    const max = this.goal.radius * 0.25;     // one event never jumps further than this
+    if (_d.length() > max) _d.setLength(max);
+    this.goal.target.add(_d);
+    this._clampTarget();
+  }
+
+  _clampTarget() {
+    const t = this.goal.target;
+    t.x = clamp(t.x, -this.bounds, this.bounds);
+    t.z = clamp(t.z, -this.bounds, this.bounds);
+    t.y = clamp(t.y, 0, 30);
   }
 
   _pan(dx, dy) {
@@ -182,14 +354,45 @@ export class CameraRig {
   rotateBy(dTheta) { this.goal.theta += dTheta; }
   zoomBy(f) { this.goal.radius = clamp(this.goal.radius * f, this.minRadius, this.maxRadius); }
 
+  /** Tell the rig how much of the screen the UI covers (px from the top / bottom edge). Backward compatible: optional. */
+  setInsets(top = 0, bottom = 0, left = 0, right = 0) {
+    const I = this.insets;
+    I.top = Math.max(0, +top || 0); I.bottom = Math.max(0, +bottom || 0);
+    I.left = Math.max(0, +left || 0); I.right = Math.max(0, +right || 0);
+  }
+
+  /** Ease the projection offset toward the middle of the uncovered area (cheap: a few compares per frame). */
+  _applyOffset(dt) {
+    const w = this.dom.clientWidth, h = this.dom.clientHeight;
+    if (!w || !h) return;
+    const I = this.insets;
+    const wy = clamp((I.bottom - I.top) / 2, -h * 0.25, h * 0.25);
+    const wx = clamp((I.right - I.left) / 2, -w * 0.15, w * 0.15);
+    let ny = wy, nx = wx;
+    if (dt !== null) {
+      const k = 1 - Math.exp(-dt * 8);
+      if (Math.abs(wy - this._ofs) > 0.5) ny = this._ofs + (wy - this._ofs) * k;
+      if (Math.abs(wx - this._ofx) > 0.5) nx = this._ofx + (wx - this._ofx) * k;
+    }
+    if (ny === this._ofs && nx === this._ofx && w === this._vw && h === this._vh && this.camera.aspect === this._asp) return;
+    this._ofs = ny; this._ofx = nx; this._vw = w; this._vh = h; this._asp = this.camera.aspect;
+    if (Math.abs(ny) < 0.5 && Math.abs(nx) < 0.5) { if (this.camera.view?.enabled) this.camera.clearViewOffset(); }
+    else this.camera.setViewOffset(w, h, nx, ny, w, h);
+  }
+
+  /** True while a finger / button is down on the canvas. */
+  get busy() { return this.pointers.size > 0; }
+
   /** Jump immediately (no smoothing). */
   snap() {
     this.target.copy(this.goal.target);
     this.theta = this.goal.theta; this.phi = this.goal.phi; this.radius = this.goal.radius;
+    this._applyOffset(null);
     this._apply();
   }
 
   update(dt) {
+    this._applyOffset(dt);
     const k = 1 - Math.exp(-dt * 10);
     this.target.lerp(this.goal.target, k);
     this.theta += (this.goal.theta - this.theta) * k;
@@ -207,13 +410,21 @@ export class CameraRig {
     );
     if (this.camera.position.y < 0.6) this.camera.position.y = 0.6;
     this.camera.lookAt(this.target);
+    this.camera.updateMatrixWorld();
   }
 
   /** Serializable view for saves / photo presets. */
   getView() { const g = this.goal; return { t: [g.target.x, g.target.y, g.target.z], th: g.theta, ph: g.phi, r: g.radius }; }
+  /** Apply a view ({t:[x,y,z], th, ph, r}); malformed / non-finite views are ignored, values clamped to the rig's limits. */
   setView(v, immediate = false) {
-    if (!v) return;
-    this.goal.target.set(...v.t); this.goal.theta = v.th; this.goal.phi = v.ph; this.goal.radius = v.r;
+    if (!v || !Array.isArray(v.t) || v.t.length < 3) return;
+    const ok = (n) => typeof n === 'number' && Number.isFinite(n);
+    if (![v.t[0], v.t[1], v.t[2], v.th, v.ph, v.r].every(ok)) return;
+    this.goal.target.set(v.t[0], v.t[1], v.t[2]);
+    this._clampTarget();
+    this.goal.theta = v.th;
+    this.goal.phi = clamp(v.ph, this.minPhi, this.maxPhi);
+    this.goal.radius = clamp(v.r, this.minRadius, this.maxRadius);
     if (immediate) this.snap();
   }
 }

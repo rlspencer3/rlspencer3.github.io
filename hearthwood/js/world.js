@@ -8,6 +8,7 @@ import {
 import { getDef } from './catalog.js';
 import { MATERIALS } from './materials.js';
 import { events } from './state.js';
+import { Batcher, LAYER_BAKED } from './batcher.js';
 
 const HALF_PI = Math.PI / 2;
 const RECORD_FIELDS = ['t', 'x', 'y', 'z', 'a', 'r', 'h', 's', 'm', 'c', 'k'];
@@ -26,7 +27,11 @@ export function compact(p) {
 }
 
 export class World {
-  constructor(scene) {
+  /**
+   * @param {THREE.Scene} scene
+   * @param {object} [opts] { batch: false | batcher options } — static batching (see batcher.js), on by default
+   */
+  constructor(scene, opts = {}) {
     this.root = new THREE.Group();
     this.root.name = 'world';
     scene.add(this.root);
@@ -37,13 +42,30 @@ export class World {
     this.viewLevel = MAX_LEVEL;
     this.seeAll = true;
     this.templates = new Map();    // build-signature -> merged template Object3D
+    // Template cache bounds: templates used by placed pieces are kept; unused ("idle") ones are kept for quick
+    // reuse (undo, ghosts, repaint back) up to maxIdleTemplates, then the least recently used are disposed.
+    this._tplRefs = new Map();     // sig -> number of placed entries whose object was cloned from it
+    this._tplIdle = new Set();     // sigs no placed entry uses, least recently used first
+    this.maxIdleTemplates = 160;
     this.version = 0;              // bumps on every change
+    // Static batching: merges settled pieces into ~one mesh per material (separate group in the scene).
+    const bo = opts.batch === false ? { enabled: false } : (typeof opts.batch === 'object' ? opts.batch : {});
+    this.batcher = new Batcher(this, scene, bo);
+    /** Optional hook (from, to) called when a piece's object is rebuilt in place (main.js moves tweens). */
+    this.onRemount = null;
+  }
+
+  /** Per-frame upkeep (batch baking). Returns true when shadow maps should be refreshed. */
+  tick(dt) {
+    if (this._tplIdle.size > this.maxIdleTemplates) this._trimTemplates();
+    return this.batcher.update(dt);
   }
 
   // ---------- records ----------
 
   /** Fill defaults for a record and return a normalized copy (or null if the type is unknown). */
   normalize(p) {
+    if (!p || typeof p !== 'object' || typeof p.t !== 'string') return null;
     const def = getDef(p.t);
     if (!def) return null;
     const q = {};
@@ -63,7 +85,7 @@ export class World {
   }
 
   keyOf(p) {
-    const def = getDef(p.t);
+    const def = p && getDef(p.t);
     return def ? slotKey(def, p) : null;
   }
 
@@ -147,9 +169,14 @@ export class World {
   buildLocal(p) {
     const def = getDef(p.t);
     const ctx = this.ctxFor(p, def);
-    const sig = this._signature(p, def, ctx);
+    return this._buildLocal(p, def, ctx, this._signature(p, def, ctx));
+  }
+
+  _buildLocal(p, def, ctx, sig) {
     let tpl = sig ? this.templates.get(sig) : null;
-    if (!tpl) {
+    if (tpl) {
+      if (this._tplIdle.has(sig)) { this._tplIdle.delete(sig); this._tplIdle.add(sig); }   // recently used
+    } else {
       let raw;
       try {
         raw = def.build(p, ctx);
@@ -158,9 +185,33 @@ export class World {
         raw = errorObject();
       }
       tpl = mergeByMaterial(raw);
-      if (sig) this.templates.set(sig, tpl);
+      if (sig) {
+        this.templates.set(sig, tpl);
+        if (!this._tplRefs.get(sig)) this._tplIdle.add(sig);   // a ghost / overlay look: idle until placed
+      }
     }
     return tpl.clone();
+  }
+
+  /** Count placed entries per template (d = +1 mounted, -1 unmounted); unused templates become idle. */
+  _useTpl(sig, d) {
+    if (!sig) return;
+    const n = (this._tplRefs.get(sig) || 0) + d;
+    if (n > 0) { this._tplRefs.set(sig, n); this._tplIdle.delete(sig); return; }
+    this._tplRefs.delete(sig);
+    if (this.templates.has(sig)) { this._tplIdle.delete(sig); this._tplIdle.add(sig); }
+  }
+
+  /** Dispose the least recently used idle templates beyond maxIdleTemplates (their geometry is theirs alone). */
+  _trimTemplates() {
+    const idle = this._tplIdle;
+    while (idle.size > this.maxIdleTemplates) {
+      const sig = idle.values().next().value;
+      idle.delete(sig);
+      const tpl = this.templates.get(sig);
+      this.templates.delete(sig);
+      if (tpl) tpl.traverse((o) => { if (o.userData.ownGeo) o.geometry.dispose(); });
+    }
   }
 
   /** Build a fully positioned object (used for ghosts & blueprint overlays). */
@@ -172,32 +223,56 @@ export class World {
     return wrap;
   }
 
-  _mount(p, def, key) {
-    const obj = this.buildPlaced(p);
-    obj.userData.key = key;
+  /** Positioned object for a placed record, tagged with its slot key and template signature. */
+  _buildEntryObj(p, def, key) {
+    const ctx = this.ctxFor(p, def);
+    const sig = this._signature(p, def, ctx);
+    const obj = new THREE.Group();
+    obj.add(this._buildLocal(p, def, ctx, sig));
+    this.placeTransform(p, def, obj);
     obj.traverse((o) => { o.userData.key = key; });
+    obj.userData.sig = sig;
+    return obj;
+  }
+
+  _mount(p, def, key) {
+    const obj = this._buildEntryObj(p, def, key);
+    this._useTpl(obj.userData.sig, 1);
     const entry = { key, p, def, obj, level: p.y };
     obj.visible = this._levelVisible(entry);
     this.root.add(obj);
     this.entries.set(key, entry);
+    this.batcher.add(entry);
     return entry;
   }
 
   _unmount(entry) {
+    this.batcher.remove(entry);
     this.root.remove(entry.obj);
     this.entries.delete(entry.key);
+    this._useTpl(entry.obj.userData.sig, -1);
   }
 
-  _remountInPlace(entry) {
+  /** Rebuild a (contextual) piece in place. Skipped when its look (template signature) is unchanged. */
+  _remountInPlace(entry, force = false) {
     const old = entry.obj;
-    const obj = this.buildPlaced(entry.p);
-    obj.userData.key = entry.key;
-    obj.traverse((o) => { o.userData.key = entry.key; });
+    if (!force && old.userData.sig) {
+      const sig = this._signature(entry.p, entry.def, this.ctxFor(entry.p, entry.def));
+      if (sig === old.userData.sig) return false;
+    }
+    const obj = this._buildEntryObj(entry.p, entry.def, entry.key);
     obj.visible = old.visible;
     obj.scale.copy(old.scale);
     this.root.remove(old);
     this.root.add(obj);
     entry.obj = obj;
+    this._useTpl(obj.userData.sig, 1);
+    this._useTpl(old.userData.sig, -1);
+    this.batcher.remounted(entry, old);
+    if (this.onRemount) {
+      try { this.onRemount(old, obj); } catch (e) { console.error(e); }
+    }
+    return true;
   }
 
   /** Rebuild contextual pieces near a record (within 1 cell and 1 level). */
@@ -258,22 +333,24 @@ export class World {
 
   clear(opts = {}) {
     const ops = [];
+    this.batcher.reset();
     for (const e of [...this.entries.values()]) { ops.push({ type: 'remove', p: e.p }); this._unmount(e); }
     this._record(ops, opts);
     this._changed('clear');
   }
 
   beginBatch() { if (!this._batch) this._batch = []; this._batchDepth = (this._batchDepth || 0) + 1; }
+  /** Close a batch. Returns true when the outermost batch pushed one undo step (it recorded something). */
   endBatch() {
-    if (!this._batch) return;
+    if (!this._batch) return false;
     this._batchDepth--;
-    if (this._batchDepth > 0) return;
+    if (this._batchDepth > 0) return false;
     const ops = this._batch;
     this._batch = null;
-    if (ops.length) {
-      this.undoStack.push(ops); this.redoStack.length = 0; this._trimUndo();
-      events.emit('history', { canUndo: this.canUndo(), canRedo: this.canRedo() });
-    }
+    if (!ops.length) return false;
+    this.undoStack.push(ops); this.redoStack.length = 0; this._trimUndo();
+    events.emit('history', { canUndo: this.canUndo(), canRedo: this.canRedo() });
+    return true;
   }
 
   _record(ops, opts) {
@@ -348,8 +425,22 @@ export class World {
     return true;
   }
 
+  /**
+   * Revert the last undo step WITHOUT offering it as a redo (a gesture that turned out to be accidental,
+   * e.g. a draw stroke that was really the start of a pinch). Emits world-change {kind:'undo'} and history.
+   */
+  discardLast() {
+    const ops = this.undoStack.pop();
+    if (!ops) return false;
+    this._apply(ops, true);
+    this._changed('undo');
+    events.emit('history', { canUndo: this.canUndo(), canRedo: this.canRedo() });
+    return true;
+  }
+
   _changed(kind, p, prev) {
     this.version++;
+    if (this._tplIdle.size > this.maxIdleTemplates) this._trimTemplates();
     events.emit('world-change', { kind, p, prev, count: this.entries.size });
   }
 
@@ -366,6 +457,7 @@ export class World {
     const list = Array.isArray(data) ? data : data?.pieces;
     if (!Array.isArray(list)) return false;
     const ops = [];
+    this.batcher.reset();
     for (const e of [...this.entries.values()]) { ops.push({ type: 'remove', p: e.p }); this._unmount(e); }
     let n = 0;
     for (const rec of list) {
@@ -381,8 +473,13 @@ export class World {
     }
     // contextual pieces need neighbours present: rebuild them all once
     for (const e of this.entries.values()) if (e.def.contextual) this._remountInPlace(e);
+    this.batcher.flush();          // bake on the next frames, no quiet period
     if (opts.record) this._record(ops, opts);
-    else { this.undoStack.length = 0; this.redoStack.length = 0; }
+    else {
+      // a fresh history: also drop a batch left open (e.g. a draw stroke), whose ops describe the old world
+      this.undoStack.length = 0; this.redoStack.length = 0;
+      this._batch = null; this._batchDepth = 0;
+    }
     events.emit('history', { canUndo: this.canUndo(), canRedo: this.canRedo() });
     this._changed('load');
     return n;
@@ -398,11 +495,16 @@ export class World {
     this.viewLevel = level;
     this.seeAll = seeAll;
     for (const e of this.entries.values()) e.obj.visible = this._levelVisible(e);
+    this.batcher.setView(level, seeAll);
   }
 
   /** Raycast placed pieces; returns { entry, point, face } of the nearest visible hit or null. */
   pick(raycaster) {
-    const hits = raycaster.intersectObjects(this.root.children, true);
+    // pieces drawn by a batch sit on LAYER_BAKED (not rendered) but must stay pickable
+    const mask = raycaster.layers.mask;
+    raycaster.layers.enable(LAYER_BAKED);
+    let hits;
+    try { hits = raycaster.intersectObjects(this.root.children, true); } finally { raycaster.layers.mask = mask; }
     for (const h of hits) {
       let o = h.object, visible = true;
       for (let q = o; q; q = q.parent) if (!q.visible) { visible = false; break; }
@@ -461,6 +563,7 @@ export function mergeByMaterial(root) {
     if (!merged) { meshes.forEach((m) => keep.push(m)); continue; }
     merged.computeBoundingSphere();
     const mm = new THREE.Mesh(merged, material);
+    mm.userData.ownGeo = true;   // made here: disposed with its template (kept noMerge meshes may share geom.js geometry)
     mm.castShadow = cast; mm.receiveShadow = receive;
     out.add(mm);
   }
