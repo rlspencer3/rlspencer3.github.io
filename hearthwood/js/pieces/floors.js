@@ -828,7 +828,7 @@ function pergolaNb(p, ctx) {
 registerPiece({
   id: 'pergola', name: 'Pergola Top', cat: 'frame', slot: 'cell', layer: 'F', rot: 'four',
   mats: ['wood', 'timber', 'trim'], matGroup: 'frame', paint: true, levels: [1, MAX_LEVEL], contextual: true,
-  icon: '🌿', sound: 'wood', desc: 'Open rafters over a patio or porch — dappled shade. Place one level up, on beams.',
+  icon: '🌿', sound: 'wood', desc: 'Open rafters over a patio or porch — dappled shade. Place it one floor up, on beams.',
   thumb: { y: 1 }, showcase: { y: 1 },
   contextKey(p, ctx) {
     const n = pergolaNb(p, ctx);

@@ -18,6 +18,16 @@ const _hit2 = new THREE.Vector3();
 
 const LS_TIPS = 'hearthwood.tips';
 const TOUCH_TIP_MS = 6000;        // undo this soon after a touch placement → suggest press-and-hold
+const LINE_SLACK = 0.8;           // a wall stroke stays on its grid line until the finger is this many cells off it…
+const LINE_ON = 0.3;              // …(closer than this counts as "on the line")
+const SEG_SLACK = 0.25;           // …and takes the next segment once the finger is this far into it
+const TURN_RATIO = 0.5;           // leaving the line steeper than ~63° is a turn (an L), shallower a hop to the next line
+const ROOF_FAR = '🏠 Tap the top of a wall to rest the roof on it';
+// build grid: soft white by day, a dim moonlit blue at night (so it doesn't glow over the scene)
+const GRID_OPACITY = 0.28;
+const GRID_NIGHT_DIM = 0.55;
+const GRID_DAY = new THREE.Color(0xffffff);
+const GRID_NIGHT = new THREE.Color(0x8d9cc4);
 /** Wall-like pieces that can hold up a roof (garden fences, hedges and railings can't). */
 const holdsRoof = (def) => !!def && (def.layer === 'B' || def.cat === 'walls' || def.cat === 'openings');
 
@@ -71,6 +81,17 @@ export class Builder {
     grid.material.depthWrite = false;
     grid.position.set(center, 0, center);
     grid.renderOrder = 2;
+    // the grid is unlit (and not tone mapped): fade & tint it with the dark so it doesn't glow at night.
+    // Checked just before it draws — no per-frame work while it's hidden, nothing allocated.
+    this._gridNight = -1;
+    grid.onBeforeRender = () => {
+      const n = this.app.env?.night;
+      const night = typeof n === 'number' && Number.isFinite(n) ? clamp(n, 0, 1) : 0;
+      if (Math.abs(night - this._gridNight) < 0.004) return;
+      this._gridNight = night;
+      grid.material.opacity = GRID_OPACITY * (1 - GRID_NIGHT_DIM * night);
+      grid.material.color.copy(GRID_DAY).lerp(GRID_NIGHT, night);
+    };
     this.grid = grid;
     this.scene.add(grid);
 
@@ -292,17 +313,92 @@ export class Builder {
     return true;
   }
 
-  /** Base level for a roof piece under the finger: the top of the walls you're pointing at. */
-  _roofLevel(sx, sy) {
+  /**
+   * Where a roof piece under the finger settles: { lv, x, z }. lv is the level whose floor plane is the top of
+   * the walls (1..MAX_LEVEL + 1 — MAX_LEVEL + 1 is a roof over the top floor's walls, stored as y = MAX_LEVEL
+   * plus a storey of half-steps), (x, z) the cell there.
+   * Pointing at a wall, beam or post: on top of THAT piece, in a cell beside it — or { far: true, … } when the
+   * finger's line crosses its top more than about a cell away (e.g. a tap low on a wall face), so the tap fails
+   * visibly instead of dropping a panel somewhere else. Otherwise: the highest supported plane under the finger.
+   * Null when nothing holds a roof.
+   */
+  _roofLevel(sx, sy, pick) {
     const top = this._topLevel();
     if (top < 0) return null;
-    const maxY = Math.min(MAX_LEVEL, top + 1, state.seeAll ? MAX_LEVEL : state.level + 1);
+    const e = pick?.entry;
+    if (e && (holdsRoof(e.def) || e.def.layer === 'P')) {
+      const lv = Math.min(e.p.y + 1, MAX_LEVEL + 1);
+      const hit = this.rayPlane(sx, sy, levelY(lv));
+      if (!hit) return null;
+      const x = Math.floor(hit.x / CELL), z = Math.floor(hit.z / CELL);
+      if (this._pieceDist(e, hit) > CELL) return { far: true, lv, x, z };
+      if (this._roofSupported(x, lv, z)) return { lv, x, z };
+      const [bx, bz] = this._besideCell(e, hit);      // just off the end of the wall: the cell beside it
+      return { lv, x: bx, z: bz };
+    }
+    const maxY = Math.min(MAX_LEVEL + 1, top + 1, state.seeAll ? MAX_LEVEL + 1 : state.level + 1);
     for (let y = maxY; y >= 1; y--) {
       const hit = this.rayPlane(sx, sy, levelY(y));
       if (!hit) continue;
-      if (this._roofSupported(Math.floor(hit.x / CELL), y, Math.floor(hit.z / CELL))) return y;
+      const x = Math.floor(hit.x / CELL), z = Math.floor(hit.z / CELL);
+      if (this._roofSupported(x, y, z)) return { lv: y, x, z };
     }
     return null;
+  }
+
+  /** Horizontal distance (m) from a world point to a wall-like piece's footprint (edge segment or post). */
+  _pieceDist(e, P) {
+    const p = e.p;
+    if (e.def.slot === 'edge') {
+      const x0 = p.x * CELL, z0 = p.z * CELL;
+      const t = clamp(p.a === 'x' ? (P.x - x0) / CELL : (P.z - z0) / CELL, 0, 1);
+      const qx = p.a === 'x' ? x0 + t * CELL : x0, qz = p.a === 'x' ? z0 : z0 + t * CELL;
+      return Math.hypot(P.x - qx, P.z - qz);
+    }
+    if (e.def.slot === 'corner') return Math.hypot(P.x - p.x * CELL, P.z - p.z * CELL);
+    return Math.hypot(P.x - (p.x + 0.5) * CELL, P.z - (p.z + 0.5) * CELL);
+  }
+
+  /** The cell next to a wall / post that is nearer a world point (a roof resting on that piece). */
+  _besideCell(e, P) {
+    const p = e.p;
+    if (e.def.slot === 'edge') {
+      if (p.a === 'x') return [p.x, P.z < p.z * CELL ? p.z - 1 : p.z];
+      return [P.x < p.x * CELL ? p.x - 1 : p.x, p.z];
+    }
+    if (e.def.slot === 'corner') return [P.x < p.x * CELL ? p.x - 1 : p.x, P.z < p.z * CELL ? p.z - 1 : p.z];
+    return [p.x, p.z];
+  }
+
+  /**
+   * Wall strokes keep to their grid line: the finger may wander up to LINE_SLACK cells off it (a drifting thumb)
+   * before the stroke follows. Leaving it across the line (a turn) carries on along the cross line from the
+   * nearest corner (an L); leaving while still travelling along it moves the stroke to the parallel line.
+   */
+  _strokeLine(dr, sx, sy, L, at, keep = false) {
+    const hit = at || this.rayPlane(sx, sy, levelY(L));   // the finger's spot (see resolve), else the floor
+    if (!hit) return;
+    const x = dr.axis === 'x';
+    const along = (x ? hit.x : hit.z) / CELL, perp = (x ? hit.z : hit.x) / CELL;
+    const off = Math.abs(perp - dr.line);
+    if (off <= LINE_ON) {
+      if (Math.abs(along - dr.on) > 0.05) dr.go = Math.sign(along - dr.on);
+      dr.on = along;
+      return;
+    }
+    if (keep || off <= LINE_SLACK) return;
+    if (Math.abs(along - dr.on) < TURN_RATIO * off) {
+      // turned a corner (left the line steeply): the new line runs across the old one, through the corner at
+      // the end of the row laid so far (no stub past it), else the corner nearest where the finger left
+      dr.axis = x ? 'z' : 'x';
+      dr.line = dr.seg !== undefined && dr.go ? dr.seg + (dr.go > 0 ? 1 : 0) : Math.round(dr.on);
+      dr.on = perp;
+    } else {
+      dr.line = Math.round(perp);
+      dr.on = along;
+    }
+    dr.seg = undefined;
+    dr.go = 0;
   }
 
   /** Open roof ends: edges beside a visible slope panel where the roof doesn't carry on. Cached per world/view. */
@@ -315,7 +411,9 @@ export class Builder {
     for (const e of W.entries.values()) {
       if (e.def.layer !== 'R' || (e.def.roof?.kind || 'slope') !== 'slope' || !e.obj.visible) continue;
       const q = e.p, hs = 2 * q.y + (q.h || 0), r = q.r || 0;
-      const gy = Math.floor(hs / 2);
+      // the gable stands on the floor under the roof's edge there; over the top floor (no floor above it) it
+      // takes the top floor's slot and grows a storey taller (h ≥ 2: the wall and the triangle in one piece)
+      const gy = Math.min(MAX_LEVEL, Math.floor(hs / 2));
       const sides = (r === 0 || r === 2)
         ? [['z', q.x, q.z, q.x - 1, q.z], ['z', q.x + 1, q.z, q.x + 1, q.z]]
         : [['x', q.x, q.z, q.x, q.z - 1], ['x', q.x, q.z + 1, q.x, q.z + 1]];
@@ -325,7 +423,7 @@ export class Builder {
         const k = `${a}|${x}|${z}|${gy}`;
         if (seen.has(k)) continue;
         seen.add(k);
-        list.push({ a, x, z, y: gy, top: (hs - 2 * gy + (e.def.roof?.rise ?? 1)) * STEP, rx: q.x, rz: q.z });
+        list.push({ a, x, z, y: gy, lift: hs - 2 * gy, top: (hs - 2 * gy + (e.def.roof?.rise ?? 1)) * STEP, rx: q.x, rz: q.z });
       }
     }
     this._gc = { sig, list };
@@ -337,25 +435,8 @@ export class Builder {
     const cands = this._gableCandidates();
     if (!cands.length) return null;
     const ray = _ray.ray;
-    if (pick) {
-      const e = pick.entry;
-      // the roof panel itself → its nearest open end
-      if (e.def.layer === 'R') {
-        let best = null, bd = Infinity;
-        for (const c of cands) {
-          if (c.rx !== e.p.x || c.rz !== e.p.z) continue;
-          const d = c.a === 'z' ? Math.abs(pick.point.x - c.x * CELL) : Math.abs(pick.point.z - c.z * CELL);
-          if (d < bd) { bd = d; best = c; }
-        }
-        if (best) return best;
-      }
-      // the wall right under an open end
-      if (e.def.layer === 'W' && !e.def.autoGable) {
-        const c = cands.find((c) => c.a === e.p.a && c.x === e.p.x && c.z === e.p.z && c.y === e.p.y + 1);
-        if (c) return c;
-      }
-    }
-    // the open triangle itself
+    // the open triangle itself, when nothing stands in front of it (looking through one open end, the far
+    // end's wall or the panels behind must not win)
     const o = ray.origin, dir = ray.direction;
     let best = null, bestT = Infinity;
     for (const c of cands) {
@@ -376,6 +457,25 @@ export class Builder {
       best = c; bestT = t;
     }
     if (best && (!pick || bestT <= pick.point.distanceTo(o) + 0.3)) return best;
+    if (pick) {
+      const e = pick.entry;
+      // the roof panel itself → its nearest open end
+      if (e.def.layer === 'R') {
+        let near = null, bd = Infinity;
+        for (const c of cands) {
+          if (c.rx !== e.p.x || c.rz !== e.p.z) continue;
+          const d = c.a === 'z' ? Math.abs(pick.point.x - c.x * CELL) : Math.abs(pick.point.z - c.z * CELL);
+          if (d < bd) { bd = d; near = c; }
+        }
+        if (near) return near;
+      }
+      // the wall right under an open end (over the top floor: the wall the tall gable takes the place of)
+      if (e.def.layer === 'W' && !e.def.autoGable) {
+        const c = cands.find((c) => c.a === e.p.a && c.x === e.p.x && c.z === e.p.z
+          && (c.y === e.p.y + 1 || (c.y === e.p.y && c.lift >= 2)));
+        if (c) return c;
+      }
+    }
     return null;
   }
 
@@ -411,13 +511,24 @@ export class Builder {
       const c = this._gableSlot(pick);
       if (c) { p.a = c.a; p.x = c.x; p.z = c.z; p.y = c.y; fixed = true; }
     }
+    // a wall stroke keeps to its grid line (and turns corners) — decided before the pieces under the finger
+    const dr = this.drawing;
+    if (!fixed && dr && dr.axis && dr.line !== undefined && def.slot === 'edge') {
+      // where the finger is: on a wall the stroke is restyling, the spot on that wall (seen low, the floor behind
+      // a wall can be cells away); else the floor — and over a piece of its own kind on its line (one it just
+      // laid), it is still on that line whatever the floor behind says
+      const e = pick?.entry;
+      const edgeHere = e && e.def.slot === 'edge' && e.p.y === L;
+      const laid = edgeHere && e.def.id === def.id && e.p.a === dr.axis && (e.p.a === 'x' ? e.p.z : e.p.x) === dr.line;
+      this._strokeLine(dr, sx, sy, L, edgeHere && e.def.id !== def.id ? pick.point : null, laid);
+    }
     // 3. the piece under the finger
     if (!fixed && pick) {
       const e = pick.entry;
-      // a stroke follows the floor grid: walls standing in the way (same piece, or across the stroke's line)
-      // must not hijack it into cross walls
-      const dr = this.drawing;
-      const skip = dr && (e.def.id === def.id || (dr.axis && e.p.a !== dr.axis));
+      // a stroke follows the floor grid: walls standing in the way (same piece, across the stroke's line, or
+      // along a parallel line the finger is only drifting toward) must not hijack it
+      const skip = dr && (e.def.id === def.id || (dr.axis && (e.p.a !== dr.axis
+        || (dr.line !== undefined && e.def.slot === 'edge' && (e.p.a === 'x' ? e.p.z : e.p.x) !== dr.line))));
       if (def.slot === 'edge' && e.def.slot === 'edge' && !skip) {
         if (e.p.y === L || this._swapAcross(def, e, pick)) { p.a = e.p.a; p.x = e.p.x; p.z = e.p.z; p.y = e.p.y; fixed = true; }
       } else if (def.slot === 'corner' && (e.def.slot === 'edge' || e.def.slot === 'corner') && e.p.y === L) {
@@ -427,21 +538,32 @@ export class Builder {
         p.x = e.p.x; p.z = e.p.z; p.y = e.p.y; p.h = e.p.h; fixed = 'roof';
       } else if (def.cat === 'roof' && def.slot === 'cell' && def.layer !== 'R' && e.def.layer === 'R') {
         // chimney tapped onto the roof: stand it in that spot on the storey under the roof
-        p.x = e.p.x; p.z = e.p.z; p.y = Math.max(0, e.p.y - 1); fixed = true;
+        // (a roof over the top floor's walls is y = MAX_LEVEL lifted a storey: that floor is the one under it)
+        p.x = e.p.x; p.z = e.p.z; fixed = true;
+        p.y = e.p.y === MAX_LEVEL && (e.p.h || 0) >= 2 ? MAX_LEVEL : Math.max(0, e.p.y - 1);
       }
     }
-    // 4. roofs settle on top of the walls under the finger (any floor); a draw stroke keeps its first level
+    // 4. roofs settle on top of the walls under the finger (any floor, the top floor's too); a draw stroke keeps
+    //    its first level. Records stop at y = MAX_LEVEL, so a roof over the top floor's walls is y = MAX_LEVEL
+    //    with `lift` (a storey of half-steps) added to its height.
+    let lift = 0, roofFar = false, roofLv = null;
     if (!fixed && def.layer === 'R') {
-      let lv = this.drawing ? this.drawing.roofLevel : undefined;
-      if (lv === undefined) {
-        lv = this._roofLevel(sx, sy);
-        if (this.drawing) this.drawing.roofLevel = lv;
+      if (dr && dr.roofLevel !== undefined) roofLv = dr.roofLevel;
+      else {
+        const r = this._roofLevel(sx, sy, pick);
+        roofLv = r ? r.lv : null;
+        if (r && !r.far) { px = (r.x + 0.5) * CELL; pz = (r.z + 0.5) * CELL; }
+        roofFar = !!r?.far;
+        // a stroke that starts off a wall top tries again as the finger moves on
+        if (dr && !roofFar) dr.roofLevel = roofLv;
       }
-      if (lv !== null && lv !== undefined) p.y = lv;
+      if (roofLv !== null) {
+        if (roofLv > MAX_LEVEL) { p.y = MAX_LEVEL; lift = 2 * (roofLv - MAX_LEVEL); } else p.y = roofLv;
+      }
     }
     if (!fixed) {
       if (px === undefined) {
-        const hit = this.rayPlane(sx, sy, levelY(p.y));
+        const hit = this.rayPlane(sx, sy, levelY(p.y) + lift * STEP);
         if (!hit) return null;
         px = hit.x; pz = hit.z;
       }
@@ -449,11 +571,20 @@ export class Builder {
         p.x = Math.floor(px / CELL); p.z = Math.floor(pz / CELL);
       } else if (def.slot === 'corner') {
         p.x = Math.round(px / CELL); p.z = Math.round(pz / CELL);
+      } else if (dr && dr.axis && dr.line !== undefined) {
+        // a stroke: one segment after the next along its line (a turn just past a corner leaves no stub)
+        const along = (dr.axis === 'x' ? px : pz) / CELL;
+        let i = Math.floor(along);
+        if (dr.seg === i - 1 && along - i < SEG_SLACK) i = dr.seg;
+        else if (dr.seg === i + 1 && i + 1 - along < SEG_SLACK) i = dr.seg;
+        dr.seg = i;
+        if (dr.axis === 'x') Object.assign(p, { a: 'x', x: i, z: dr.line });
+        else Object.assign(p, { a: 'z', x: dr.line, z: i });
       } else {
         const fx = px / CELL, fz = pz / CELL;
         const cx = Math.floor(fx), cz = Math.floor(fz);
         const u = fx - cx, v = fz - cz;
-        const lock = this.drawing?.axis;
+        const lock = dr?.axis;
         const cand = [
           { a: 'x', x: cx, z: cz, d: v },
           { a: 'x', x: cx, z: cz + 1, d: 1 - v },
@@ -461,7 +592,15 @@ export class Builder {
           { a: 'z', x: cx + 1, z: cz, d: 1 - u },
         ].filter((c) => !lock || c.a === lock);
         cand.sort((m, n) => m.d - n.d);
-        Object.assign(p, { a: cand[0].a, x: cand[0].x, z: cand[0].z });
+        const c = cand[0];
+        let ex = c.x, ez = c.z;
+        if (dr?.dir) {
+          // a stroke's first edge: a finger landing just short of a corner starts the row at that corner
+          const f = c.a === 'x' ? u : v;
+          const step = dr.dir > 0 && f > 1 - SEG_SLACK ? 1 : dr.dir < 0 && f < SEG_SLACK ? -1 : 0;
+          if (c.a === 'x') ex += step; else ez += step;
+        }
+        Object.assign(p, { a: c.a, x: ex, z: ez });
       }
     }
     if (fixed === 'guide') {
@@ -470,9 +609,10 @@ export class Builder {
     } else {
       if (def.rot === 'four') p.r = state.rot & 3;
       else if (def.rot === 'flip') p.r = state.rot >= 2 ? 2 : 0;
-      if (def.layer === 'R') {
-        if (fixed !== 'roof') p.h = this.autoRoofHeight(def, p.x, p.z, p.r, p.y);
-        p.h = clamp((p.h || 0) + (fixed === 'roof' ? 0 : state.hOffset), 0, 9);
+      if (def.layer === 'R' && fixed !== 'roof') {
+        // (a tapped panel keeps its own height)
+        p.h = this.autoRoofHeight(def, p.x, p.z, p.r, p.y + lift / 2) + lift;
+        p.h = clamp(p.h + state.hOffset, lift, 9 + lift);
       }
       if (def.autoGable) Object.assign(p, this.autoGable(def, p));
     }
@@ -488,8 +628,10 @@ export class Builder {
     const v = this.world.validate(q);
     const key = this.world.keyOf(q);
     const out = { p: q, def, key, valid: v.ok, reason: v.reason, existing: this.world.get(key) };
+    // pointing at a wall too far below its top: say so (and show where the roof would land) rather than place it
+    if (roofFar && out.valid) { out.valid = false; out.reason = ROOF_FAR; }
     // following a blueprint: while this piece still has glowing guides, only they take it (no stray pieces from mis-taps)
-    if (fixed !== 'guide' && v.ok && this._guidesLeft(def)) {
+    if (fixed !== 'guide' && out.valid && this._guidesLeft(def)) {
       out.valid = false;
       out.offGuide = true;
       out.reason = '✨ Tap a glowing guide — or Stop guides to build freely';
@@ -688,8 +830,10 @@ export class Builder {
 
   /** Feedback & gentle teaching after a piece lands. */
   _afterPlace(t, touch, stroke) {
-    // a piece placed above the cutaway would vanish: show every floor
-    if (!state.seeAll && t.p.y > state.level) {
+    // a piece placed above the cutaway would vanish: show every floor (a roof over the top floor's walls
+    // hides above that floor, though its record says y = MAX_LEVEL)
+    const lv = this.world.entry(this.world.keyOf(t.p))?.level ?? t.p.y;
+    if (!state.seeAll && lv > state.level) {
       state.set({ seeAll: true });
       events.emit('toast', { text: '👁️ Showing every floor so you can see it', kind: 'info', ms: 2200 });
     }
@@ -804,21 +948,41 @@ export class Builder {
     this.world.beginBatch();
     let touch = false;
     for (const ptr of this.rig.pointers?.values?.() || []) if (ptr.type !== 'mouse') touch = true;
-    this.drawing = { seen: new Set(), axis: null, count: 0, ops: 0, touch, roofLevel: undefined };
+    // axis / line / on / seg / go: a wall stroke's grid line (see _strokeLine); roofLevel: a roof stroke's level
+    this.drawing = { seen: new Set(), axis: null, line: undefined, on: 0, seg: undefined, go: 0, count: 0, ops: 0, touch, roofLevel: undefined };
+    // a wall-like stroke waits for the finger's first move: its direction picks the first edge's axis (not
+    // whichever edge happens to be nearest where the finger landed — on a corner that's a coin toss)
+    if (state.tool === 'build' && getDef(state.pieceId)?.slot === 'edge') { this.drawing.from = { x: sx, y: sy }; return; }
     this.drawMove(sx, sy);
   }
 
   drawMove(sx, sy) {
     const d = this.drawing;
     if (!d) return;
+    if (d.from) {
+      const f = d.from, y = levelY(state.level);
+      d.from = null;
+      const a = this.rayPlane(f.x, f.y, y), b = this.rayPlane(sx, sy, y);
+      if (a && b && (a.x !== b.x || a.z !== b.z)) {
+        d.axis = Math.abs(b.x - a.x) >= Math.abs(b.z - a.z) ? 'x' : 'z';
+        d.dir = d.go = Math.sign(d.axis === 'x' ? b.x - a.x : b.z - a.z);
+      }
+      this.drawMove(f.x, f.y);
+    }
     this.lastScreen = { x: sx, y: sy };
     if (state.tool === 'build') {
       const t = this.resolve(sx, sy);
       if (!t) return;
       this._showGhost(t);
+      // the row's current segment (also when a piece under the finger decided it)
+      if (t.def.slot === 'edge' && t.p.a === d.axis && (t.p.a === 'x' ? t.p.z : t.p.x) === d.line) d.seg = t.p.a === 'x' ? t.p.x : t.p.z;
       if (d.seen.has(t.key) || !t.valid) return;
       d.seen.add(t.key);
-      if (t.def.slot === 'edge' && !d.axis) d.axis = t.p.a;
+      if (t.def.slot === 'edge' && d.line === undefined) {
+        // the first edge sets the stroke's line (see _strokeLine)
+        const x = t.p.a === 'x';
+        d.axis = t.p.a; d.line = x ? t.p.z : t.p.x; d.on = (x ? t.p.x : t.p.z) + 0.5; d.seg = x ? t.p.x : t.p.z;
+      }
       if (this.place(t.p, { silent: d.count > 0 && d.count % 2 === 1 })) {
         d.count++; d.ops++;
         this._afterPlace(t, d.touch, true);
@@ -886,10 +1050,33 @@ export class Builder {
     const def = getDef(id);
     if (!def) return;
     const prev = getDef(state.pieceId);
+    // chosen from its own tray (a card), not handed over by opening a tab
+    const fromTray = state.category === def.cat;
     const patch = { pieceId: id, category: def.cat, tool: 'build', hOffset: 0 };
     if (def.rot === 'flip' && state.rot % 2) patch.rot = 0;
     state.set(patch);
+    if (this._toItsFloor(def, fromTray)) return;
     if (!prev || prev.cat !== def.cat || prev.layer !== def.layer) this._autoView(def);
+  }
+
+  /**
+   * A piece picked up on a floor too high for it (a tree up on Floor 3, a foundation on Floor 2, stairs on the
+   * top floor): step down to the highest floor it can go on, with a gentle word. Only for a piece the player
+   * chose — opening the Floors tab upstairs hands over a foundation, but they're likely after floor tiles —
+   * except garden things, which all live outdoors. Guided builds pick the floor themselves.
+   * Returns true when the floor changed.
+   */
+  _toItsFloor(def, chosen = true) {
+    const hi = def.levels?.[1] ?? MAX_LEVEL;
+    if (state.blueprint || state.level <= hi || (!chosen && def.cat !== 'garden')) return false;
+    this.setLevel(hi);
+    if (state.level !== hi) return false;
+    let text;
+    if (hi === 0) text = def.cat === 'garden' ? '🌷 Back to Floor 1 — the garden grows on the ground' : `${def.icon || '🌱'} Back to Floor 1 — this one sits on the ground`;
+    else if (/^(stairs|stairs_spiral|ladder)$/.test(def.id)) text = `🪜 Floor ${hi + 1} — stairs climb from here up to Floor ${hi + 2}`;
+    else text = `${def.icon || '🪜'} Floor ${hi + 1} — as high as this one goes`;
+    events.emit('toast', { text, kind: 'info', ms: 2600 });
+    return true;
   }
 
   /**
@@ -976,13 +1163,16 @@ export class Builder {
     else if (k === 'q') this.rig.rotateBy(-Math.PI / 8);
     else if (k === 'w' && e.shiftKey) this.rig.rotateBy(Math.PI / 8);
     else if (/^[1-7]$/.test(k)) {
-      // like tapping a tab: hand over a piece from that category (the last one used there, else the first)
+      // like tapping a tab: hand over a piece from that category (the last one used there, else the first;
+      // upstairs one that can go on this floor — garden things walk back down by themselves)
       const cat = CATEGORIES[+k - 1];
       if (!cat) return;
       const cur = getDef(state.pieceId);
       if (cur && cur.cat === cat.id) { state.set({ category: cat.id }); return; }
       const list = piecesIn(cat.id);
-      const want = list.find((d) => d.id === this._lastInCat?.[cat.id]) || list[0];
+      const fits = (d) => state.level >= (d.levels?.[0] ?? 0) && state.level <= (d.levels?.[1] ?? MAX_LEVEL);
+      const last = list.find((d) => d.id === this._lastInCat?.[cat.id]);
+      const want = (last && (fits(last) || last.cat === 'garden') ? last : null) || list.find(fits) || last || list[0];
       if (want) this.selectPiece(want.id); else state.set({ category: cat.id });
     }
   }

@@ -294,6 +294,30 @@
 .hw-tab.is-on { background: var(--honey-l); color: var(--ink); box-shadow: 0 0 0 1.5px rgba(227, 181, 90, 0.7) inset; }
 .hw-tab.is-on .hw-tab-ic { transform: translateY(-1px) scale(1.1); }
 
+/* landscape phones: the tabs fold into this one button beside the cards; it opens .hw-catpick */
+.hw-catbtn {
+  grid-area: cat; display: none; flex: none; position: relative; width: 58px; height: 68px; border-radius: 16px;
+  flex-direction: column; align-items: center; justify-content: center; gap: 0; color: var(--ink);
+  background: var(--honey-l); box-shadow: 0 0 0 1.5px rgba(227, 181, 90, 0.7) inset;
+  transition: transform 0.12s var(--ease);
+}
+.hw-catbtn:active { transform: scale(0.94); }
+.hw-catbtn-ic { font-size: 21px; line-height: 1.1; }
+.hw-catbtn-lb { font-size: 10px; font-weight: 800; max-width: 54px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hw-catbtn-more { line-height: 0; color: var(--wood-d); margin-top: 1px; }
+.hw-catbtn-more .hw-ic { width: 14px; height: 14px; stroke-width: 2.8; }
+.hw-pop-cats { padding: 8px; }
+.hw-catpick { display: flex; gap: 4px; position: relative; z-index: 1; }
+.hw-catopt {
+  flex: none; width: 58px; height: 56px; border-radius: 15px; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 2px; color: var(--ink-soft);
+  transition: background 0.2s, transform 0.12s var(--ease);
+}
+.hw-catopt:active { transform: scale(0.94); }
+.hw-catopt .hw-tab-ic { font-size: 20px; }
+.hw-catopt-lb { font-size: 10.5px; font-weight: 800; white-space: nowrap; }
+.hw-catopt.is-on { background: var(--honey-l); color: var(--ink); box-shadow: 0 0 0 1.5px rgba(227, 181, 90, 0.7) inset; }
+
 /* ---- piece cards */
 .hw-cards {
   grid-area: cards; display: flex; gap: 8px; padding: 4px 2px 2px; min-width: 0;
@@ -346,6 +370,19 @@
 .hw-phead-done { display: none; }
 .hw-prow { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .hw-prow-lb { font-size: 10px; font-weight: 800; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.4px; padding-left: 6px; }
+/* material groups: jump the long strip straight to Walls / Roof / Floors / Trim */
+.hw-prow-m { gap: 5px; }
+.hw-prow-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.hw-pjump { display: flex; gap: 4px; margin-left: auto; flex: none; }
+.hw-pj {
+  position: relative; flex: none; height: 28px; padding: 0 10px; border-radius: 999px; white-space: nowrap;
+  font-size: 11.5px; font-weight: 800; color: var(--ink-soft);
+  background: rgba(255, 255, 255, 0.6); box-shadow: 0 0 0 1.5px var(--line) inset;
+  transition: background 0.2s, color 0.2s, box-shadow 0.2s, transform 0.12s var(--ease);
+}
+.hw-pj::after { content: ""; position: absolute; left: -2px; right: -2px; top: -8px; bottom: -8px; }   /* 44 px tall to a thumb */
+.hw-pj:active { transform: scale(0.94); }
+.hw-pj.is-on { background: var(--honey-l); color: var(--ink); box-shadow: 0 0 0 1.5px rgba(227, 181, 90, 0.75) inset; }
 .hw-pm, .hw-pc {
   display: flex; align-items: center; gap: 6px; padding: 3px 2px; min-width: 0;
   -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent);
@@ -468,6 +505,15 @@
 .hw-hud.is-done .hw-bar i { background: linear-gradient(90deg, var(--sage), #6f9a4a); }
 .hw-hud-acts { display: flex; gap: 6px; justify-content: flex-end; }
 .hw-hud-acts .hw-pill { min-height: 40px; font-size: 13.5px; padding: 0 16px; }
+/* finished: one small row (the camera frames the house underneath it) */
+.hw-hud.is-done {
+  grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "emoji tx acts";
+  padding: 6px 8px; gap: 9px; background: rgba(238, 245, 230, 0.97);
+  box-shadow: 0 0 0 1.5px rgba(111, 143, 90, 0.35) inset, var(--sh);
+}
+.hw-hud.is-done .hw-bar, .hw-hud.is-done .hw-hud-num { display: none; }
+.hw-hud.is-done .hw-hud-emoji { width: 34px; height: 34px; font-size: 21px; background: #dcebcd; }
+.hw-hud.is-done .hw-hud-tx small { color: #4f6f42; font-weight: 700; }
 
 /* ---------------------------------------------------------------- menu sheet */
 
@@ -811,32 +857,44 @@
   .hw-tool-lb { display: none; }
   .hw-draw, .hw-see { height: 50px; }
   .hw-draw .hw-tool-lb, .hw-see .hw-tool-lb { display: block; font-size: 9.5px; }
+  /* the tray is ONE row: [category] [piece cards…] [materials · colour · turn]. The tabs fold into the
+     category button (a picker pops up above it); the piece name is already on its card. */
   .hw-tray {
     left: calc(var(--safe-left) + 8px); right: calc(var(--safe-right) + var(--rail-w) + 18px);
-    padding: 4px 8px calc(var(--safe-bottom) + 6px);
-    grid-template-columns: auto minmax(0, 1fr);
-    grid-template-areas: "tabs ctx" "cards cards" "paint paint";
-    column-gap: 10px;
+    padding: 5px 8px calc(var(--safe-bottom) + 5px);
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "cat cards ctx" "paint paint paint";
+    column-gap: 8px; align-items: center;
   }
-  .hw-tray.mode-paint .hw-ctx, .hw-tray.is-collapsed .hw-ctx { grid-column: 1 / -1; }
-  .hw-ctx { min-height: 50px; padding: 2px 0 4px; border-bottom: 0; }
+  .hw-tabs { display: none; }
+  .hw-catbtn { display: flex; }
+  .hw-tray.is-collapsed .hw-catbtn, .hw-tray.mode-paint .hw-catbtn { display: none; }
+  .hw-ctx { min-height: 50px; max-width: min(38vw, 340px); padding: 0 0 0 8px; border-bottom: 0; border-left: 1.5px dashed var(--line); }
+  .hw-tray:not(.is-collapsed) .hw-ctx .hw-chip-name { display: none; }      /* the ring marks the chosen one */
+  .hw-tray:not(.is-collapsed) .hw-ctx .hw-chip.is-sel { padding-right: 5px; }
+  .hw-tray:not(.is-collapsed) .hw-ctx.is-bare { display: none; }
+  .hw-tray.mode-paint .hw-ctx, .hw-tray.is-collapsed .hw-ctx { grid-column: 1 / -1; max-width: none; padding-left: 0; border-left: 0; }
+  .hw-tray:not(.is-collapsed) .hw-ctx-name { display: none; }
   .hw-lbl-tx { display: none; }
-  .hw-tabs { padding: 4px 0; align-self: center; }
-  .hw-tab { flex: none; width: 44px; height: 44px; }
-  .hw-tab-lb { display: none; }
-  .hw-tab-ic { font-size: 20px; }
-  .hw-cards { padding-top: 2px; border-top: 1.5px dashed var(--line); padding-top: 6px; }
-  .hw-card { width: 76px; height: 82px; --thumb: 44px; border-radius: 16px; padding-top: 4px; gap: 1px; }
-  .hw-card-name { -webkit-line-clamp: 2; font-size: 10px; line-height: 1.08; }
+  .hw-cards { padding: 4px 2px; }
+  .hw-card { width: 70px; height: 70px; --thumb: 38px; border-radius: 15px; padding: 3px 3px 4px; gap: 1px; }
+  .hw-card-name { -webkit-line-clamp: 2; font-size: 9.5px; line-height: 1.08; }
   .hw-tray.mode-paint:not(.is-collapsed) .hw-ctx { display: none; }
+  /* paint: [material groups][material strip] over [Main · Accent · Done][colour strip] */
   .hw-paint {
-    padding: 4px 0 0; display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; row-gap: 2px; align-items: center;
+    padding: 2px 0 0; display: grid; grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "jump mats" "head cols"; column-gap: 8px; row-gap: 2px; align-items: center;
   }
-  .hw-phead { grid-column: 1; grid-row: 1 / span 2; flex-direction: column; align-items: stretch; gap: 6px; padding: 0; }
+  .hw-prow, .hw-prow-head { display: contents; }
+  .hw-pjump { grid-area: jump; margin: 0; justify-self: end; }
+  .hw-pj { height: 36px; padding: 0 9px; }
+  .hw-pj::after { top: -4px; bottom: -4px; }
+  .hw-pm { grid-area: mats; }
+  .hw-pc { grid-area: cols; }
+  .hw-phead { grid-area: head; justify-self: end; gap: 6px; padding: 0; }
   .hw-phead .hw-seg-btn { padding: 0 10px; min-height: 34px; }
-  .hw-phead-done { display: inline-flex; min-height: 38px; }
+  .hw-phead-done { display: inline-flex; min-height: 40px; padding: 0 12px; }
   .hw-brush { display: none; }
-  .hw-prow { grid-column: 2; }
   .hw-prow-lb { display: none; }
   .hw-hud {
     grid-template-columns: auto minmax(0, 1fr) auto auto;

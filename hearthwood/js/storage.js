@@ -15,14 +15,16 @@ const SLOT = (n) => `hearthwood.slot.${n}.v1`;
 export const SLOT_COUNT = 6;
 /**
  * Most pieces a save / code may hold: the number of distinct slots on the lot (F, I, D per cell and level;
- * W, B per edge and level; P per vertex and level; R per cell and roof half-step) = 21 805. A real build can
- * never exceed it, so the cap only ever trims junk (duplicates are pointless: one piece per slot).
+ * W, B per edge and level; P per vertex and level; R per cell and roof half-step 0..2 * MAX_LEVEL + MAX_H) = 25 005.
+ * A real build can never exceed it, so the cap only ever trims junk (duplicates are pointless: one piece per slot).
  */
 const N_ = GRID_MAX - GRID_MIN + 1, L_ = MAX_LEVEL + 1;
-export const MAX_PIECES = 3 * N_ * N_ * L_ + 4 * N_ * (N_ + 1) * L_ + (N_ + 1) * (N_ + 1) * L_ + N_ * N_ * ((MAX_LEVEL + 2) * 2 + 1);
+// highest roof / gable h a record may carry: a roof over the top floor's walls is y = MAX_LEVEL lifted a storey
+// (h = 2 + its rows), so world.validate accepts roof bases up to hs = 2 * MAX_LEVEL + MAX_H
+const MAX_H = 12;
+export const MAX_PIECES = 3 * N_ * N_ * L_ + 4 * N_ * (N_ + 1) * L_ + (N_ + 1) * (N_ + 1) * L_ + N_ * N_ * (2 * MAX_LEVEL + MAX_H + 1);
 const MAX_CODE_CHARS = 4_000_000;          // longer pastes are not build codes
 const MAX_JSON_BYTES = 8 * 1024 * 1024;    // decoded JSON cap (a full lot is ≈ 1.5 MB)
-const MAX_H = (MAX_LEVEL + 2) * 2;         // highest roof / gable half-step count world.validate accepts
 
 const warned = new Set();
 function safeGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
@@ -163,14 +165,16 @@ export const storage = {
 
   /**
    * Decode a build code (or raw JSON). Tolerates text around the code (e.g. a pasted chat message) and
-   * line breaks inside it. Resolves to sanitized data (see sanitize) or null; never rejects.
+   * line breaks inside it. Resolves to sanitized data with at least one piece (see sanitize), or null for
+   * anything that holds no home (garbage, an empty build); never rejects.
    */
   async importCode(code) {
     try {
       if (typeof code !== 'string' || code.length > MAX_CODE_CHARS) return null;
       code = code.trim();
       // pieces this game doesn't know are dropped (a code from a newer version still opens), and a code
-      // whose pieces were all rejected is not a build (don't replace the player's home with nothing)
+      // with no usable pieces at all (an empty list, or every piece rejected) is not a build: never replace
+      // the player's home with nothing
       const ok = (d) => {
         if (!d) return null;
         if (allDefs().length) {
@@ -178,7 +182,7 @@ export const storage = {
           d.pieces = d.pieces.filter((p) => getDef(p.t));
           if (d.pieces.length < n) d.dropped = (d.dropped || 0) + n - d.pieces.length;
         }
-        return d.pieces.length || !d.dropped ? d : null;
+        return d.pieces.length ? d : null;
       };
       if (code.startsWith('{') || code.startsWith('[')) return ok(sanitize(JSON.parse(code)));
       // the code may have been wrapped onto several lines; text may follow it on later lines

@@ -31,7 +31,9 @@ hearthwood/
   js/blueprints.js      house templates, guided build mode, stamping
   tools/shot.mjs        headless screenshot / test runner
   tools/batch-regress.mjs  static-batching regression test (node tools/batch-regress.mjs, ~6 min, exit 1 on failure)
-  sw.js                 service worker (network-first, offline cache) — add every new module to its CORE list
+  sw.js                 service worker (offline copy, one source per page load) — add every new file to its CORE list
+  manifest.webmanifest  install-as-app manifest (start_url / scope / id "./", icons in icons/)
+  README.md             how to play, and how to run / test the game
 ```
 
 ## Visual style (all modules)
@@ -54,7 +56,7 @@ phone. Prefer a few well-proportioned details (trim, sills, frames, caps) over m
 | `ROOF_T` | 0.14 | roof panel thickness |
 | `EAVE` | 0.35 | roof overhang at eaves |
 | `GRID_MIN..GRID_MAX` | -10..9 | inclusive cell range (40 m × 40 m lot centered on origin) |
-| `MAX_LEVEL` | 4 | levels 0..4 |
+| `MAX_LEVEL` | 4 | levels 0..4 — players see them as "Floor 1".."Floor 5" (never "level") |
 
 `levelY(y) = BASE_Y + y * LEVEL_H` is the floor height of level `y`.
 
@@ -72,7 +74,8 @@ phone. Prefer a few well-proportioned details (trim, sills, frames, caps) over m
   x, y, z,           // cell / vertex / edge coords and level
   a: 'x' | 'z',      // edge axis (edge pieces only)
   r: 0..3,           // rotation (cell pieces: 0..3, edge pieces: 0 or 2 = flipped)
-  h: 0..9,           // roof pieces: half-steps above levelY(y); gables: half-steps of rectangular wall under the slope
+  h: 0..12,          // roof pieces: half-steps above levelY(y); gables: half-steps of rectangular wall under the slope
+                     //   (records stop at y = MAX_LEVEL: a roof on the top floor's walls is y = MAX_LEVEL, h ≥ 2)
   s: 1 | 2,          // gables: rise in half-steps across the edge (1 gentle, 2 steep)
   m: 'clapboard',    // main material id (must be in def.mats)
   c: '#f7f3ea',      // main paint colour (only if def.paint and material paintable, or def.paintAlways)
@@ -124,8 +127,15 @@ cache key gains `|g`); pieces built off the lot (palette thumbnails at x = 500) 
   * `flat`: rise 0. `cap`: a self-contained top piece (e.g. pyramid), rise as declared. `roof_pyramid` is contextual:
     sides that meet another roof panel join it (no eave / top boards there); only open sides get an overhang.
 * The builder auto-stacks: a slope placed uphill of another slope with the same `r` starts where that one ends;
-  corners stack diagonally. Users can nudge with roof ▲▼ (`state.hOffset`).
-* Roof visibility follows `p.y` (the level the roof was built from), so a whole roof hides together.
+  corners stack diagonally. Users can nudge with roof ▲▼ (`state.hOffset`, −8..+8 half-steps).
+* Roofs over the top floor: records stop at y = MAX_LEVEL, so a roof resting on Floor-5 walls is stored as
+  y = MAX_LEVEL lifted a storey (`lift` = 2 half-steps: h = autoRoofHeight(…, MAX_LEVEL + 1) + 2; ▲▼ can't take it below
+  the lift). `world.validate` accepts roof bases up to hs = 2·MAX_LEVEL + 12 (storage keeps h ≤ 12, `MAX_PIECES`
+  counts those slots).
+* Roof visibility follows `p.y` (the level the roof was built from), so a whole roof hides together. A roof over the top
+  floor's walls is grouped by world (y = MAX_LEVEL panels in neighbouring cells, diagonals too, whose h..h + rise spans
+  meet): a roof whose lowest panel has h ≥ 2 gets `entry.level = MAX_LEVEL + 1`, so it hides in the Floor-5 cutaway;
+  a roof touching a Floor-4 roof stays at MAX_LEVEL.
 * A gable roof over a W-wide house: slopes of rotation r on the downhill half, rotation (r+2)%4 on the other half,
   stacked by `h`; the two top rows meet at the ridge with the same `hs + rise`.
 
@@ -134,6 +144,7 @@ cache key gains `|g`); pieces built off the lot (palette thumbnails at x = 500) 
 Placed on an edge under a roof slope that runs **along** the edge. The builder sets `h` (half-steps from `levelY(y)` to the
 roof slope's base at that edge), `s` (the slope's rise) and `r` so that local +X points uphill. Shape: from local x = −1 to +1,
 bottom at 0, top line from `h*STEP` (at x = −1) to `(h+s)*STEP` (at x = +1) — exactly the underside of the roof panel.
+Over the top floor a gable takes the Floor-5 wall's slot as one tall piece (y = MAX_LEVEL, h ≥ 2: wall and triangle).
 
 ## Piece definitions (js/catalog.js `registerPiece`)
 
@@ -208,7 +219,7 @@ Event bus `events.emit(type, detail)` / `events.on(type, fn)`:
 * `placed` {p, def, replaced}
 * `sfx` {name, flavor} — names: place, replace, remove, paint, rotate, click, undo, level, error, success, open, close, camera, blueprint-step, blueprint-done
 * `toast` {text, kind?: 'info'|'warn'|'success', ms?} — also sent once by storage.js when an autosave can't be written
-* `blueprint-progress` {id, done, total, stage, stageName}
+* `blueprint-progress` {id, done, total, stage, stageName} — `stageName` is the blueprint's own name for it (`bp.stageNames`)
 * `history` {canUndo, canRedo} — after a batch (blueprint stamp, draw stroke), a load or `discardLast()` changes the undo stacks
 * `ready` (app)
 
@@ -216,7 +227,10 @@ Event bus `events.emit(type, detail)` / `events.on(type, fn)`:
 
 `THREE, scene, camera, renderer, world, rig, builder, effects, state, events, catalog, materials, storage,
 params (URLSearchParams), errors, thumbnail(id, rec) → Promise<dataURL>, snapshot(maxWidth) → dataURL,
-loadBuild(data), newBuild(), env, audio, ui, blueprints, fps`.
+loadBuild(data, {record}), newBuild(), env, audio, ui, blueprints, fps`. `loadBuild` goes through `world.load` (`record: true`
+= one undo step: the UI loads slots and share codes that way) and resets the floor view; it eases to `data.cam`, and data
+without one (share codes) gets a view framing the build — its house, garden scenery aside — in the part of the screen
+the UI leaves free (`rig.insets`).
 
 Feature modules export `init(app)` returning an object (optionally with `update(dt)`, called each frame):
 * `env.js` → `{ update(dt), heightAt(x, z), sunDir, night }` — owns lights/sky/ground; removes nothing of the world.
@@ -225,9 +239,15 @@ Feature modules export `init(app)` returning an object (optionally with `update(
   `renderer.shadowMap.needsUpdate = true`.
 * `audio.js` → `{ update(dt) }` — listens to `sfx` events and state.
 * `blueprints.js` → `{ list(), get(id), startGuided(id), stop(), stamp(id, {animate, record}), welcome(), update(dt), active(),
-  selectNext({focus, quiet}), progress(), stages }`. An animated stamp keeps waiting pieces at scale 0.001 with their
-  inner group (`entry.obj.children[0]`) hidden until their pop-in (no draw calls; `entry.obj.visible` stays the
-  level cutaway's). In guided mode `selectNext` turns the camera to face a piece that is on the far side of the house.
+  selectNext({focus, quiet}), progress(), stages }`. `get(id)` → `{ id, name, emoji, desc, difficulty, style, cam, pieces,
+  count, stageNames }`: `stageNames` (stage id → name) names each stage after what that blueprint puts in it ("Roof" vs
+  "Roof & chimney", "Walls" vs "Ground-floor walls"; a blueprint def can override them); the guide HUD and the
+  "✨ X done! Next: Y" toasts use it. Finishing a guided build sparkles and, after ~0.3 s, glides the camera (~1.6 s)
+  to the blueprint's angle, pulled back until the house fits the free screen area; any camera input cancels the glide.
+  The "welcome home" toast is only sent when there is no UI (the UI's guide card shows it instead).
+  An animated stamp keeps waiting pieces at scale 0.001 with their inner group (`entry.obj.children[0]`) hidden until
+  their pop-in (no draw calls; `entry.obj.visible` stays the level cutaway's). In guided mode `selectNext` turns the
+  camera to face a piece that is on the far side of the house.
 * `ui.js` → `{ update(dt), toast, open(page), close, showWelcome, ask }`.
 * `app.welcomeLot` — `world.version` right after the first-visit scenery lot was placed (unchanged version ⇒ only scenery).
 
@@ -239,14 +259,18 @@ that turned out to be accidental), `canUndo()`, `canRedo()`, `beginBatch()/endBa
 `buildLocal(rec)`, `signature(rec)` (template-cache key), `setView(level, seeAll)`, `pick(raycaster)`,
 `tick(dt)` (called by main.js every frame; returns true when shadow maps must be refreshed), `batcher`,
 `onRemount(from, to)` (hook: a piece's object was rebuilt in place — main.js moves its tweens),
-`entries` (Map key → {key, p, def, obj, level}), `count`, `version` (bumps on every change).
+`entries` (Map key → {key, p, def, obj, level}; `level` is the cutaway level: `p.y`, or MAX_LEVEL + 1 for a roof over the
+top floor), `count`, `version` (bumps on every change). `validate` reasons are player-facing and use Floor wording
+('Ground floor only', 'Only on Floor N', 'Not on the ground floor', 'Only from Floor N up', 'Not on the top floor',
+'Only up to Floor N', '☁️ That’s as high as roofs go', 'Outside the lot').
 `load(data, {record: true})` is a single undo step; a non-recorded load resets both undo stacks and any open batch.
 Unknown / malformed records in `load` data are skipped.
 
 Template cache: `world.templates` (signature → merged template) is **read-only** for other modules. Templates used by
 placed pieces are kept; unused ones stay for quick reuse up to `world.maxIdleTemplates` (160, least recently used
-first) and are then disposed (on the next world change or frame). Objects from `buildPlaced` / `buildLocal` share
-their template's geometry: keep them only while they are shown (ghosts), never dispose their geometry.
+first; main.js lowers it to 80 on phones, 60 on weak phones) and are then disposed (on the next world change or
+frame). Objects from `buildPlaced` / `buildLocal` share their template's geometry: keep them only while they are shown
+(ghosts), never dispose their geometry.
 
 ### Static batching (js/batcher.js, `world.batcher`)
 
@@ -258,13 +282,19 @@ The farmhouse frame costs ~130 draw calls in total instead of ~650 (~1,250 on fr
   `world.root` but move to **layer 1** (`LAYER_BAKED`: never rendered, still pickable — `world.pick` enables it on its
   raycaster). Shadow proxies use **layer 2** (`LAYER_SHADOW`), which the batcher enables on every shadow camera.
   Layers 1 and 2 are reserved: don't use them for anything else; raycast pieces through `world.pick` / `builder.pickPiece`.
-* Vertices are sorted by level, so `setView` cutaways only shorten the draw range.
+* Vertices are sorted by level (0..MAX_LEVEL + 1, see *Roofs*), so `setView` cutaways only shorten the draw range.
 * Any change punches the piece out of its batches at once (it renders on its own on layer 0, so pop-in / pop-out and
-  paint show immediately); touched units rebake time-sliced (≤ 6 ms/frame, 4 ms on touch devices) after 0.5 s of quiet
-  and once no piece in them is scaled or tweening.
-* API: `wake(obj)` (render on its own now — call before animating `entry.obj` yourself), `flush()` (bake without the
-  quiet period), `bakeNow()` (synchronous, tests), `isBaked(entry)`, `unitsOf(entry)`, `stats()`, `setEnabled(b)`.
-* Dev params: `?batch=0` off, `?batchsize=n` shadow-region edge in cells, `?batchglass=1` also merge glass.
+  paint show immediately); touched units rebake time-sliced (≤ 6 ms/frame, 4 ms on touch devices) after 0.5 s of quiet.
+* A bake leaves out pieces that are not settled (tweening, scale ≠ 1, or inner group hidden like a cascade's waiting
+  pieces): they keep rendering on their own and wait in `batcher.pending`; every `settleEvery` (0.25 s), when nothing
+  else is ready, the ones that have settled are folded in (their units rebake at once, shadow units first). So an
+  animated stamp is mostly batched while it plays (farmhouse: ~240–290 main-pass calls a frame instead of ~660–750).
+  A piece that starts animating while its unit is being copied is left out of that bake (back to `pending`).
+* API: `wake(obj)` (render on its own now — call before animating `entry.obj` yourself; also cancels a bake that copied
+  it), `flush()` (bake without the quiet period), `bakeNow()` (synchronous, tests), `isBaked(entry)`, `unitsOf(entry)`,
+  `stats()` (incl. `pending`), `setEnabled(b)`.
+* Dev params: `?batch=0` off, `?batchsize=n` shadow-region edge in cells (integer 1..20, else 8), `?batchglass=1` also
+  merge glass.
 
 ### Camera (js/camera.js, `app.rig`)
 
@@ -277,6 +307,8 @@ view is centred in the free area with an eased view offset), `goal` ({target, th
 (pinch / slide pivot), `orbitPoint(x, y)` (twist / orbit pivot). Touch: tap = action, press-and-hold 450 ms = aim
 (preview follows the finger, lift to place, lift over the UI to cancel), 1-finger drag = orbit (or draw), 2 fingers =
 pinch / twist / slide anchored under the fingers; a second finger soon after a stroke starts cancels the stroke.
+An aim also cancels when the finger lifts outside the canvas rect or over anything that isn't the canvas
+(`elementFromPoint`: UI chrome, or null past the edge of the screen): `onAimEnd(x, y, true)`.
 
 ### Effects (js/effects.js, `app.effects`)
 
@@ -287,9 +319,16 @@ in the scene for the animation), `isAnimating(obj)`, `retarget(from, to)`, `puff
 ### Storage (js/storage.js, `app.storage`)
 
 Every load path (autosave, slots, share codes) goes through `sanitize(data)`, which never throws: typed / bounded
-fields, `#rgb`/`#rrggbb` colours, a checked `cam`, at most `MAX_PIECES` (the lot's slot count) records. Loaded data may
-carry `dropped` (records rejected); the UI tells the player. Share codes `HW1:` (deflate-raw, decoded by a capped pure-JS
-`inflateRaw`) and `HW0:`; `importCode(text)` finds a code inside pasted text and never rejects.
+fields, `#rgb`/`#rrggbb` colours, a checked `cam`, at most `MAX_PIECES` (the lot's slot count, 25 005, roof h up to
+`MAX_H` = 12) records. Loaded data may carry `dropped` (records rejected); the UI tells the player. Share codes `HW1:`
+(deflate-raw, decoded by a capped pure-JS `inflateRaw`) and `HW0:` hold pieces only (no name, no camera);
+`importCode(text)` finds a code inside pasted text, never rejects, and resolves to data with at least one known piece —
+or `null` for anything that holds no home (garbage, an empty list, only unknown pieces), so a bad paste never replaces
+a build. Slots: `SLOT_COUNT` = 6, `saveSlot(n, data, {name, thumb, cam})`, `loadSlot(n)`, `deleteSlot(n)`, `listSlots()`.
+Autosave (main.js): 0.8 s after a world change, and flushed on `pagehide` / `visibilitychange` → hidden, together with
+the camera view (a camera-only change is written too, but only over an autosave of this build, never over the
+first-visit lot); never with `?nosave=1` or a showcase. `autosave()` returns false when storage is full / blocked
+(one toast).
 
 ### Builder (js/builder.js, `app.builder`)
 
@@ -300,7 +339,42 @@ z, r, level)`, `autoGable(def, p)`, `eraseAt / paintAt / pickAt(sx, sy)`, `drawS
 `resolve` tries, in order: blueprint guides (guided mode: taps snap to a glowing guide; off-guide taps for pieces that
 still have guides are rejected with a hint), gables (snap to the open roof end pointed at, on any floor), the piece under
 the pointer (windows / doors also swap walls on other visible floors), then the grid. Roof pieces settle on top of the
-walls under the pointer whatever floor is active (fixed for the length of a draw stroke).
+walls under the pointer whatever floor is active (fixed for the length of a draw stroke). With the finger on a wall,
+beam or post the roof rests on top of THAT piece (level = its level + 1, up to MAX_LEVEL + 1 over the top floor), in
+the cell where the finger's line crosses the wall-top height; more than a cell away from the piece (a tap low on a
+wall face) is invalid: red ghost, error sound and '🏠 Tap the top of a wall to rest the roof on it'. Gables: an open
+triangle visible in front of whatever the ray hits wins (looking through one open end never picks the far end).
+* Draw strokes: wall-like (edge) strokes take their first edge's axis from the finger's first move, then keep to that
+  grid line while the finger stays within 0.8 cell of it; leaving it steeply (along-travel < 0.5 × off-distance) turns
+  the corner at the end of the row laid so far (an L, no stub), leaving it shallowly hops to the parallel line. Walls on
+  other parallel lines don't hijack the stroke. A stroke is one undo step (`beginBatch` / `endBatch`); an erase stroke
+  only removes one kind of thing on one floor (roof panels count as one kind).
+* `selectPiece(id)`: a piece chosen from its own tray on a floor above its highest allowed level steps down to that
+  floor with a gentle toast (garden pieces always do; never in guided mode); otherwise `_autoView` may pick a floor /
+  cutaway for it (cozy things → a floor with a floor piece, cutaway on; roofs & gables → every floor shown).
+  Category tabs (and keys 1–7) hand over the last piece used in that category when it can go on the current floor
+  (garden things always: selectPiece walks them down), else the first one that can (Floors upstairs → floor tiles, not
+  a foundation).
+* A placed piece whose cutaway level is above the current cutaway turns `seeAll` on ('👁️ Showing every floor…').
+* The build grid is unlit: it fades (opacity 0.28 → ×(1 − 0.55·night)) and tints moonlit blue with `env.night`.
+
+## Offline & install (sw.js, manifest.webmanifest)
+
+main.js registers `./sw.js` on https only (local dev servers stay worker-free). The worker's scope is its folder, so the
+game works from any subpath (GitHub Pages: `/hearthwood/`); the manifest's `start_url`, `scope` and `id` are `./`.
+
+* `CORE` in sw.js lists every file the game can request: index.html, both css files, every js module (incl. `js/pieces/`
+  and the vendored three.js + addons it imports), the manifest and its icons. Fonts are system fonts and audio is
+  synthesized, so there is nothing else. Add a new file to `CORE` and bump `VERSION` (that renames the cache; old ones
+  are deleted on activate). Content-only changes need no bump.
+* One source per page load, so old and new modules never mix: if the page itself comes from the network (within 6 s),
+  every file of that load comes from the network revalidated (`cache: 'no-cache'`), falling back to the offline copy
+  only if the network fails; otherwise (offline, or stalled) every file comes from the offline copy. Responses reach
+  the page marked `Cache-Control: no-cache` so the browser's own caches can't reuse a module behind the worker's back.
+* The offline copy is always one complete set: installed with `addAll` (all or nothing), and refreshed ~4 s after a
+  page load the network answered (at most once a minute): every CORE file is fetched first and the changed ones are
+  stored only if all of them arrived.
+* Other pages in the folder (docs, README) are left to the browser.
 
 ## Dev tools
 
@@ -311,9 +385,12 @@ walls under the pointer whatever floor is active (fixed for the length of a draw
 * `?clean=1` start empty · `?nosave=1` don't autosave · `?ui=0` no UI · `?bp=<id>` stamp a blueprint ·
   `?time=0.8` · `?season=winter` · `?weather=rain` · `?level=1` · `?seeAll=1` · `?cam=theta,phi,radius,tx,ty,tz` ·
   `?welcome=1` show the welcome card · `?thumbs=0` no blueprint pictures · `?batch=0|batchsize=n|batchglass=1` (batching).
-  Invalid values are ignored (level is clamped to 0..MAX_LEVEL).
+  Values are validated: numbers must be strict numbers (`time=0.5abc` is ignored), `level` an integer (then clamped to
+  0..MAX_LEVEL), `batchsize` an integer 1..20; `cam` parts that aren't numbers are ignored (a bad theta / phi / radius
+  drops the whole view, missing target parts default to 0, 1, 0).
 * `node tools/shot.mjs --query "showcase=walls&ui=0" --out /path/shot.png [--w 1280 --h 800] [--mobile] [--cam …]
   [--eval "js"] [--script file.js] [--wait ms] [--mobile --landscape]` — serves the game, screenshots it, prints console errors, piece count,
   draw calls & triangles. `--script` bodies run inside an async function in the page and may `return` a value.
-* `node tools/batch-regress.mjs` — static-batching regression (stamp/erase/paint/undo/levels/pick/touch, batched vs
-  unbatched pixel comparison, draw-call ratio). Exits 1 on failure.
+* `node tools/batch-regress.mjs` — static-batching regression, 48 checks (stamp/erase/paint/undo/levels/pick/touch,
+  mid-cascade invariants, batched vs unbatched pixel comparison, draw-call ratio). Exits 1 on failure. `HW_ROOT=…` tests
+  another checkout.

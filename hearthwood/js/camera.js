@@ -1,5 +1,6 @@
 // Orbit camera rig with mobile-first gestures.
-//   Touch:  tap = action · press & hold = aim (preview follows the finger, lift to place, lift over the UI to cancel)
+//   Touch:  tap = action · press & hold = aim (preview follows the finger, lift to place, lift over the UI or
+//           past the edge of the screen to cancel)
 //           1 finger drag = orbit around what's under the screen centre (or draw in draw mode)
 //           2 fingers = pinch zoom / twist / slide, all anchored on the point between the fingers
 //   Mouse:  left drag = orbit (or draw) · right/middle drag or shift+drag = pan · wheel = zoom toward the cursor · click = action
@@ -243,10 +244,11 @@ export class CameraRig {
       this.onGestureStart?.();
       this.mode = 'idle';
     } else if (this.mode === 'aim') {
-      // lifting over the UI (or off the screen) cancels
-      const el = document.elementFromPoint?.(e.clientX, e.clientY);
-      const off = cancelled || (el && el !== this.dom);
-      this.onAimEnd?.(pos.x, pos.y, !!off, e);
+      // lifting over the UI, or past the edge of the view (nothing there: elementFromPoint gives null), cancels
+      const r = this.dom.getBoundingClientRect();
+      let off = cancelled || !(e.clientX >= r.left && e.clientX < r.right && e.clientY >= r.top && e.clientY < r.bottom);
+      if (!off && typeof document.elementFromPoint === 'function') off = document.elementFromPoint(e.clientX, e.clientY) !== this.dom;
+      this.onAimEnd?.(pos.x, pos.y, off, e);
       this.mode = 'idle';
     } else if (this.mode === 'draw') {
       this.onDrawEnd?.(pos.x, pos.y);

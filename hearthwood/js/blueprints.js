@@ -15,7 +15,8 @@
 // autoRoofHeight / autoGable compute, so guided players reproduce the blueprint exactly.
 //
 // Stages (guided mode & the stamp cascade) are derived from each record: foundation → ground-floor
-// walls → porch → upper floor & stairs → upper walls → roof → gable ends → interior → garden.
+// walls → porch → upper floor & stairs → upper walls → roof → gable ends → interior → garden. Each
+// blueprint names its stages after what they hold (stageNamesFor: no "chimney" for a shed's roof).
 //
 // Runtime (init → { list, get, stamp, startGuided, stop, selectNext, welcome, active, update }):
 //   stamp        adds everything in one undo batch, then pops pieces in by stage over ~2 s
@@ -465,6 +466,8 @@ const DEFS = [
     id: 'aframe', name: 'A-Frame Cabin', emoji: '🔺', difficulty: 'handy', style: 'Woodland',
     desc: 'Steep roof panels from floor to ridge, a glowing glass front, a sleeping loft and a deck among the pines.',
     make: aframe, cam: { t: [0, 2.4, 0], th: 0.55, ph: 1.12, r: 23 },
+    // its "porch" stage is the front deck plus the beams the loft rests on
+    stageNames: { porch: 'Deck & loft beams', upper: 'Sleeping loft & ladder' },
   },
   {
     id: 'logcabin', name: 'Log Cabin', emoji: '🪵', difficulty: 'handy', style: 'Rustic',
@@ -513,6 +516,32 @@ function stageOf(p, def) {
   return 'garden';
 }
 
+/**
+ * What one blueprint calls each of its stages: the generic STAGES name, reworded to match what that
+ * blueprint actually puts in the stage (a shed's roof has no chimney, an A-frame's loft has a ladder,
+ * a one-storey house just has "Walls"). A blueprint's own `stageNames` win.
+ */
+function stageNamesFor(d, items) {
+  const types = {};
+  for (const it of items) (types[it.stage] ||= new Set()).add(it.p.t);
+  const has = (st, ...ts) => ts.some((t) => types[st]?.has(t));
+  const and = (parts) => (parts.length < 2 ? parts[0] || '' : `${parts.slice(0, -1).join(', ')} & ${parts[parts.length - 1]}`);
+  const names = {};
+  for (const st of Object.keys(types)) {
+    let name = STAGES[STAGE_IX[st]].name;
+    if (st === 'walls' && !types.upperWalls) name = 'Walls';
+    else if (st === 'porch') {
+      const posts = has(st, 'post');
+      const parts = [has(st, 'deck', 'steps') ? (posts ? 'Porch' : 'Deck') : null, posts ? 'posts' : null, has(st, 'beam', 'pergola') ? 'beams' : null].filter(Boolean);
+      if (parts.length) name = and(parts).replace(/^./, (c) => c.toUpperCase());
+    } else if (st === 'upper') {
+      name = has(st, 'stairs', 'stairs_spiral') ? 'Upper floor & stairs' : has(st, 'ladder') ? 'Upper floor & ladder' : 'Upper floor';
+    } else if (st === 'roof') name = has(st, 'chimney') ? 'Roof & chimney' : 'Roof';
+    names[st] = d.stageNames?.[st] || name;
+  }
+  return names;
+}
+
 /** Order inside the cascade / guide: stage, then level (roofs: height), then authoring order. */
 function sortKey(p, def, i) {
   const st = STAGE_IX[stageOf(p, def)];
@@ -559,6 +588,7 @@ export function init(app) {
       const bp = {
         id: d.id, name: d.name, emoji: d.emoji, desc: d.desc, difficulty: d.difficulty, style: d.style,
         cam: d.cam, pieces: items.map((it) => it.p), count: items.length, _items: items,
+        stageNames: stageNamesFor(d, items),
       };
       catalogue.push(bp);
     }
@@ -782,7 +812,7 @@ export function init(app) {
       } else if (it.ghost) it.ghost.visible = false;
     }
     const total = g.items.length;
-    const stageName = stage < g.stageIds.length ? STAGES[STAGE_IX[g.stageIds[stage]]].name : 'All done!';
+    const stageName = stage < g.stageIds.length ? g.bp.stageNames[g.stageIds[stage]] : 'All done!';
     const sig = `${done}|${stage}`;
     if (sig !== g.lastEmit) {
       g.lastEmit = sig;
@@ -805,12 +835,13 @@ export function init(app) {
         g.celebrated = true;
         celebrate();
         events.emit('sfx', { name: 'blueprint-done' });
-        events.emit('toast', { text: `🎉 ${g.bp.name} is finished — welcome home!`, kind: 'success', ms: 4200 });
+        // the UI's guide card turns into the "welcome home" note itself (a toast would cover the house)
+        if (!app.ui) events.emit('toast', { text: `🎉 ${g.bp.name} is finished — welcome home!`, kind: 'success', ms: 4200 });
       }
     } else if (done < total) {
       g.finished = false;
       if (stage > prevStage && prevStage >= 0 && newly.length) {
-        const doneName = STAGES[STAGE_IX[g.stageIds[prevStage]]].name;
+        const doneName = g.bp.stageNames[g.stageIds[prevStage]];
         events.emit('sfx', { name: 'success' });
         events.emit('toast', { text: `✨ ${doneName} done! Next: ${stageName}`, kind: 'success', ms: 2800 });
         sparkleStage(prevStage);
@@ -847,6 +878,76 @@ export function init(app) {
       effects.sparkle(_v, n % 2 ? 0xffe7a3 : 0xffc6d9, 14);
       n++;
     }
+    // the pay-off shot: glide out to the whole house (after a beat, so the UI has folded its guide
+    // card into the small "All done" row and the free part of the screen is known)
+    glide = { bp: guide.bp, wait: 0.3, t: 0, from: null, to: null, last: rig.getView() };
+  }
+
+  // ---------------------------------------------------------------- the finishing shot
+  // The camera glides (~1.6 s, eased) to the blueprint's own view angle of the finished house, turned the
+  // short way round, centred on it and pulled back until the house (garden scenery aside) sits inside the
+  // part of the screen the UI leaves free (rig.insets), never closer than the blueprint's own view. Any
+  // other camera move (a finger, the wheel, a new view) hands the camera straight back to the player.
+  let glide = null;   // { bp, wait, t, from, to, last }
+
+  function finishView(bp) {
+    const v = view(bp.cam);
+    const TAU = Math.PI * 2;
+    v.th = bp.cam.th + TAU * Math.round((rig.goal.theta - bp.cam.th) / TAU);
+    // the house as built (garden scenery left out): the placed pieces' real bounds
+    const box = new THREE.Box3();
+    for (const { key, def } of bp._items) {
+      if (def.cat === 'garden') continue;
+      const e = world.entry(key);
+      if (e) box.expandByObject(e.obj);
+    }
+    if (box.isEmpty()) return v;
+    box.min.y = Math.max(0, box.min.y);
+    v.t = [(box.min.x + box.max.x) / 2, v.t[1], (box.min.z + box.max.z) / 2];
+    const b = { x0: box.min.x, x1: box.max.x, z0: box.min.z, z1: box.max.z, y0: box.min.y, y1: box.max.y };
+    const el = app.renderer?.domElement, w = el?.clientWidth || 0, h = el?.clientHeight || 0;
+    if (!w || !h || !app.camera) return v;
+    // the free area in NDC of the camera without the rig's view offset (camera.js shifts the view so the
+    // target sits in the middle of that area), less a small margin
+    const I = rig.insets || { top: 0, bottom: 0, left: 0, right: 0 };
+    const oy = clamp((I.bottom - I.top) / 2, -h * 0.25, h * 0.25), ox = clamp((I.right - I.left) / 2, -w * 0.15, w * 0.15);
+    let yHi = 1 - (2 * (I.top + oy)) / h, yLo = -1 + (2 * (I.bottom - oy)) / h;
+    let xHi = 1 - (2 * (I.right - ox)) / w, xLo = -1 + (2 * (I.left + ox)) / w;
+    const my = (yHi - yLo) * 0.06, mx = (xHi - xLo) * 0.06;
+    yHi -= my; yLo += my; xHi -= mx; xLo += mx;
+    const cam = app.camera.clone();
+    cam.clearViewOffset();
+    const T = new THREE.Vector3(v.t[0], v.t[1], v.t[2]), q = new THREE.Vector3(), sp = Math.sin(v.ph);
+    for (let r = Math.max(v.r, rig.minRadius); r <= rig.maxRadius; r *= 1.05) {
+      v.r = r;
+      cam.position.set(T.x + r * sp * Math.sin(v.th), Math.max(0.6, T.y + r * Math.cos(v.ph)), T.z + r * sp * Math.cos(v.th));
+      cam.lookAt(T);
+      cam.updateMatrixWorld();
+      let inside = true;
+      for (let i = 0; i < 8 && inside; i++) {
+        q.set(i & 1 ? b.x1 : b.x0, i & 2 ? b.y1 : b.y0, i & 4 ? b.z1 : b.z0).project(cam);
+        inside = q.z < 1 && q.x > xLo && q.x < xHi && q.y > yLo && q.y < yHi;
+      }
+      if (inside) break;
+    }
+    return v;
+  }
+
+  function stepGlide(dt) {
+    const gl = glide;
+    if (rig.busy) { glide = null; return; }
+    if (gl.last) {
+      const v = rig.getView(), l = gl.last;
+      if (Math.abs(v.r - l.r) > 1e-3 || Math.abs(v.th - l.th) > 1e-4 || Math.abs(v.ph - l.ph) > 1e-4 || v.t.some((x, i) => Math.abs(x - l.t[i]) > 1e-3)) { glide = null; return; }
+    }
+    if (gl.wait > 0) { gl.wait -= dt; return; }
+    if (!gl.to) { gl.from = rig.getView(); gl.to = finishView(gl.bp); }
+    gl.t = Math.min(1, gl.t + dt / 1.6);
+    const k = gl.t * gl.t * (3 - 2 * gl.t), f = gl.from, to = gl.to;
+    const mix = (a, c) => a + (c - a) * k;
+    rig.setView({ t: [mix(f.t[0], to.t[0]), mix(f.t[1], to.t[1]), mix(f.t[2], to.t[2])], th: mix(f.th, to.th), ph: mix(f.ph, to.ph), r: mix(f.r, to.r) });
+    gl.last = rig.getView();
+    if (gl.t >= 1) glide = null;
   }
 
   /**
@@ -1077,6 +1178,7 @@ export function init(app) {
 
   function update(dt) {
     if (anim) stepAnim(dt);
+    if (glide) stepGlide(Math.min(dt, 0.1));
     if (guide) {
       pulseT += dt;
       hiMat.emissiveIntensity = hiBase + 0.22 * (0.5 + 0.5 * Math.sin(pulseT * 3.2));

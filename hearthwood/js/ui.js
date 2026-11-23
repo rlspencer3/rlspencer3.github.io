@@ -320,7 +320,10 @@ export function init(app) {
   const tabs = h('div', { class: 'hw-tabs', role: 'tablist', 'aria-label': 'Piece categories' });
   const cards = h('div', { class: 'hw-cards hw-scroll', role: 'listbox', 'aria-label': 'Pieces' });
   const paintPanel = h('div', { class: 'hw-paint' });
-  tray.append(handle, ctx, tabs, cards, paintPanel);
+  // landscape phones fold the tabs into this one button beside the cards (css/ui.css); it opens a picker
+  const catIc = h('span', { class: 'hw-catbtn-ic' }), catLb = h('span', { class: 'hw-catbtn-lb' });
+  const catBtn = btn('hw-catbtn', 'Piece categories', [catIc, catLb, h('span', { class: 'hw-catbtn-more', html: svg('up') })], () => openCatPicker(), { title: 'Categories', attrs: { 'aria-haspopup': 'true', 'data-act': 'cats' } });
+  tray.append(handle, ctx, catBtn, tabs, cards, paintPanel);
   root.append(tray);
 
   let collapsed = lsGet(LS_TRAY) === '1';
@@ -387,13 +390,16 @@ export function init(app) {
     markTab();
   }
   // a tab hands you a piece from that category straight away (the last one you used there, else the first),
-  // so a new player never builds foundations while looking at the Walls tab
+  // so a new player never builds foundations while looking at the Walls tab. Upstairs it hands over one that
+  // can go on this floor (floor tiles, not a foundation); garden things walk you back down by themselves.
   const lastInCat = {};
   function openCategory(id) {
     const cur = curDef();
     if (cur && cur.cat === id) { if (state.category !== id) state.set({ category: id }); return; }
     const list = catalog.piecesIn(id);
-    const want = list.find((d) => d.id === lastInCat[id]) || list[0];
+    const fits = (d) => state.level >= (d.levels?.[0] ?? 0) && state.level <= (d.levels?.[1] ?? MAX_LEVEL);
+    const last = list.find((d) => d.id === lastInCat[id]);
+    const want = (last && (fits(last) || last.cat === 'garden') ? last : null) || list.find(fits) || last || list[0];
     if (want) builder.selectPiece(want.id);
     else state.set({ category: id });
   }
@@ -403,6 +409,22 @@ export function init(app) {
       b.classList.toggle('is-on', on);
       b.setAttribute('aria-selected', String(on));
     }
+    const cat = catalog.CATEGORIES.find((c) => c.id === state.category);
+    catIc.textContent = cat?.icon || '🧺';
+    catLb.textContent = cat ? (SHORT_CAT[cat.id] || cat.name.split(/[ &]/)[0]) : 'Pieces';
+    catBtn.setAttribute('aria-label', cat ? `${cat.name} — pick a category` : 'Piece categories');
+  }
+  function openCatPicker() {
+    const grid = h('div', { class: 'hw-catpick', role: 'group', 'aria-label': 'Piece categories' });
+    for (const cat of catalog.CATEGORIES) {
+      if (!catalog.piecesIn(cat.id).length) continue;
+      const on = cat.id === state.category;
+      grid.append(btn('hw-catopt' + (on ? ' is-on' : ''), cat.name, [h('span', { class: 'hw-tab-ic' }, cat.icon), h('span', { class: 'hw-catopt-lb' }, SHORT_CAT[cat.id] || cat.name.split(/[ &]/)[0])], () => {
+        closePop();
+        openCategory(cat.id);
+      }, { title: cat.name, attrs: { 'data-cat': cat.id, 'aria-pressed': String(on) } }));
+    }
+    showPop(catBtn, grid, 'hw-pop-cats');
   }
 
   // ---- piece cards
@@ -549,6 +571,7 @@ export function init(app) {
     ctx.textContent = '';
     curBadgeImg = null; curBadgeKey = null;
     const tool = state.tool;
+    ctx.classList.remove('is-bare');
     tray.classList.toggle('mode-paint', tool === 'paint');
     tray.classList.toggle('mode-hint', tool === 'erase' || tool === 'pick');
 
@@ -646,6 +669,7 @@ export function init(app) {
       acts.append(labelled(b, flip ? 'Flip' : 'Turn'));
     }
     if (acts.childNodes.length) ctx.append(acts);
+    ctx.classList.toggle('is-bare', mats.length <= 1 && !acts.childNodes.length && !collapsed);
   }
 
   function labelled(el, text) {
@@ -662,6 +686,17 @@ export function init(app) {
   }
 
   // ---- paint panel (paint tool)
+  // The material strip holds every group (walls, roof, floors, trim): a row of group buttons jumps it
+  // straight to one, lights up as the strip scrolls, and the strip opens on the group that suits the
+  // brush's material, else the piece in hand (roof pieces → roof materials …).
+  let pmJump = null;     // 'sel' | group id: where the material strip should start on its next layout
+  function paintGroupFor() {
+    const def = curDef();
+    let m = null;
+    try { m = def ? builder.materialFor(def) : null; } catch { m = null; }
+    const g = MATERIALS[m]?.group;
+    return PAINT_GROUPS.some((x) => x.id === g && matList(g).length) ? g : (PAINT_GROUPS.find((x) => matList(x.id).length)?.id || null);
+  }
   function renderPaint() {
     if (state.tool !== 'paint') { paintPanel.textContent = ''; return; }
     const keepA = paintPanel.querySelector('.hw-pm')?.scrollLeft || 0;
@@ -670,11 +705,14 @@ export function init(app) {
     const accent = state.paintTarget === 'accent';
 
     const matsRow = h('div', { class: 'hw-pm hw-scroll' });
+    const groupEls = new Map(), jumpBtns = new Map();
     matsRow.append(btn('hw-chip hw-keep' + (state.paintMat ? '' : ' is-sel'), 'Keep material', [ico('none'), h('span', { class: 'hw-chip-name' }, 'Keep')], () => state.set({ paintMat: null })));
     for (const g of PAINT_GROUPS) {
       const list = matList(g.id);
       if (!list.length) continue;
-      matsRow.append(h('span', { class: 'hw-group-lb' }, g.label));
+      const lb = h('span', { class: 'hw-group-lb', 'data-group': g.id }, g.label);
+      groupEls.set(g.id, lb);
+      matsRow.append(lb);
       for (const mm of list) {
         const sel = state.paintMat === mm.id;
         const col = mm.paintable && state.paintColor ? state.paintColor : (mm.swatch || mm.color);
@@ -685,6 +723,44 @@ export function init(app) {
       }
     }
     wheelScroll(matsRow);
+
+    const jump = h('div', { class: 'hw-pjump', role: 'group', 'aria-label': 'Jump to a material group' });
+    let spyHold = 0;
+    const markJump = (id) => {
+      for (const [gid, b] of jumpBtns) { b.classList.toggle('is-on', gid === id); b.setAttribute('aria-pressed', String(gid === id)); }
+    };
+    const groupLeft = (id) => {
+      const lb = groupEls.get(id);
+      if (!lb || id === groupEls.keys().next().value) return 0;     // the first group starts the strip (with Keep)
+      const x = lb.getBoundingClientRect().left - matsRow.getBoundingClientRect().left + matsRow.scrollLeft - 4;
+      return Math.max(0, Math.min(matsRow.scrollWidth - matsRow.clientWidth, x));
+    };
+    const scrollToGroup = (id, smooth) => {
+      if (!groupEls.has(id)) return;
+      markJump(id);
+      spyHold = performance.now() + (smooth ? 700 : 0);
+      matsRow.scrollTo({ left: groupLeft(id), behavior: smooth ? 'smooth' : 'auto' });
+    };
+    // light up the group the strip is showing (its label at the left edge; the last one once scrolled to the end)
+    const spy = () => {
+      if (performance.now() < spyHold || !matsRow.clientWidth) return;
+      const max = matsRow.scrollWidth - matsRow.clientWidth;
+      let cur = null;
+      for (const id of groupEls.keys()) if (groupLeft(id) <= matsRow.scrollLeft + 24) cur = id;
+      if (max > 0 && matsRow.scrollLeft >= max - 4) {
+        // at the very end the last groups can't reach the left edge: pick the one taking most of the view
+        const r = matsRow.getBoundingClientRect();
+        for (const [id, lb] of groupEls) if (lb.getBoundingClientRect().left < r.left + r.width * 0.5) cur = id;
+      }
+      markJump(cur || groupEls.keys().next().value);
+    };
+    matsRow.addEventListener('scroll', spy, { passive: true });
+    for (const g of PAINT_GROUPS) {
+      if (!groupEls.has(g.id)) continue;
+      const b = btn('hw-pj', `${g.label} materials`, g.label, () => scrollToGroup(g.id, true), { title: `Jump to ${g.label.toLowerCase()} materials`, attrs: { 'data-group': g.id, 'aria-pressed': 'false' } });
+      jumpBtns.set(g.id, b);
+      jump.append(b);
+    }
 
     const colRow = h('div', { class: 'hw-pc hw-scroll' });
     if (!accent) colRow.append(btn('hw-chip hw-keep' + (state.paintColor ? '' : ' is-sel'), 'Keep colour', [ico('none'), h('span', { class: 'hw-chip-name' }, 'Keep')], () => state.set({ paintColor: null })));
@@ -704,9 +780,19 @@ export function init(app) {
       seg([{ id: 'main', label: 'Main' }, { id: 'accent', label: 'Accent' }], accent ? 'accent' : 'main', (v) => state.set({ paintTarget: v }), 'hw-seg-sm'),
       h('div', { class: 'hw-brush' }, h('span', { class: 'hw-sw' + (accent ? ' hw-sw-acc' : ''), style: { background: prevBg } }), h('span', null, brush)),
       btn('hw-pill hw-phead-done', 'Back to building', [ico('check'), h('span', null, 'Done')], () => state.set({ tool: 'build' }))));
-    if (!accent) paintPanel.append(h('div', { class: 'hw-prow' }, h('span', { class: 'hw-prow-lb' }, 'Material'), matsRow));
+    if (!accent) paintPanel.append(h('div', { class: 'hw-prow hw-prow-m' }, h('div', { class: 'hw-prow-head' }, h('span', { class: 'hw-prow-lb' }, 'Material'), jump), matsRow));
     paintPanel.append(h('div', { class: 'hw-prow' }, h('span', { class: 'hw-prow-lb' }, accent ? 'Accent colour · doors, frames & shutters' : 'Colour'), colRow));
-    requestAnimationFrame(() => { matsRow.scrollLeft = keepA; colRow.scrollLeft = keepB; });
+    requestAnimationFrame(() => {
+      if (!matsRow.isConnected) return;     // re-rendered meanwhile: the newer strip takes the jump
+      colRow.scrollLeft = keepB;
+      if (accent) return;
+      const want = pmJump;
+      pmJump = null;
+      if (want === 'sel') ensureVisible(matsRow, matsRow.querySelector('.hw-chip.is-sel'), false, true);
+      else if (want) scrollToGroup(want, false);
+      else matsRow.scrollLeft = keepA;
+      spy();
+    });
   }
 
   // ------------------------------------------------------------------ popovers (palette, piece info)
@@ -855,7 +941,8 @@ export function init(app) {
     hud.classList.toggle('is-done', finished);
     hudEmoji.textContent = info.emoji || info.icon || '📐';
     hudName.textContent = info.name || 'Blueprint';
-    hudStage.textContent = finished ? 'All done — what a cozy home! 🎉' : stage;
+    // finished: the card folds into one small row (CSS .is-done) that is also the "welcome home" note
+    hudStage.textContent = finished ? 'All done — welcome home! 🎉' : stage;
     hudNum.textContent = total ? `${done}/${total}` : '';
     hudFill.style.width = `${(frac * 100).toFixed(1)}%`;
     hudNext.style.display = !finished && typeof app.blueprints?.selectNext === 'function' ? '' : 'none';
@@ -1056,15 +1143,36 @@ export function init(app) {
   /** True when the meadow only holds the first-visit scenery (nothing the player built). */
   const onlyWelcome = () => app.welcomeLot !== undefined && world.version === app.welcomeLot;
 
+  /**
+   * Swap the meadow for loaded data (a slot or a friend's code) as ONE undo step, so a mistaken
+   * confirm is never final. Undoing it also brings back the view and slot the player had before.
+   */
+  let loadMark = null;     // { depth, view, slot } of the last load
+  const undoDepth = () => (Array.isArray(world.undoStack) ? world.undoStack.length : -1);
+  function swapInBuild(data) {
+    const view = app.rig?.getView?.() || null, slot = state.slot;
+    if (app.blueprints?.active?.()) stopGuides();
+    app.loadBuild(data, { record: true });
+    const depth = undoDepth();
+    loadMark = depth > 0 && world.canUndo() ? { depth, view, slot } : null;
+  }
+  // the load's undo step was just undone: return to the old view (and slot marker) along with the old build
+  function afterUndo() {
+    const m = loadMark;
+    if (!m || undoDepth() !== m.depth - 1) return;
+    loadMark = null;
+    if (m.view) app.rig?.setView?.(m.view);
+    if (state.slot !== m.slot) state.set({ slot: m.slot });
+  }
+
   async function loadFrom(s) {
     const data = storage.loadSlot(s.n);
-    if (!data) { toast('That slot is empty', 'warn'); return; }
+    if (!data || !data.pieces.length) { toast('That slot is empty', 'warn'); return; }
     if (world.count && !onlyWelcome()) {
-      const ok = await ask({ icon: '🏡', title: `Load “${data.name || `House ${s.n}`}”?`, text: 'Your current build will be replaced. Save it first if you want to keep it.', buttons: [{ label: 'Load it', value: 'yes', kind: 'primary' }] });
+      const ok = await ask({ icon: '🏡', title: `Load “${data.name || `House ${s.n}`}”?`, text: 'Your current build will be replaced. Changed your mind? Undo brings it back.', buttons: [{ label: 'Load it', value: 'yes', kind: 'primary' }] });
       if (ok !== 'yes') return;
     }
-    if (app.blueprints?.active?.()) stopGuides();
-    app.loadBuild(data);
+    swapInBuild(data);
     state.set({ slot: s.n, tool: 'build' });
     if (data.name) lsSet(LS_NAME, data.name);
     closeSheet(false);
@@ -1213,16 +1321,16 @@ export function init(app) {
   async function importBuild(code) {
     if (!code || !code.trim()) { toast('Paste a code first', 'warn'); return; }
     const data = await storage.importCode(code);
-    if (!data || !Array.isArray(data.pieces)) { toast('Hmm, that code doesn’t look right', 'warn'); return; }
+    // garbage, or a code with no pieces in it: never swap the player's home for an empty meadow
+    if (!data || !Array.isArray(data.pieces) || !data.pieces.length) { toast('🤔 Hmm, there’s no home in that code — check it was copied whole', 'warn', 3200); return; }
+    const n = data.pieces.length, piecesTxt = `${n} piece${n === 1 ? '' : 's'}`;
     if (world.count && !onlyWelcome()) {
-      const ok = await ask({ icon: '📬', title: 'Open this home?', text: `It has ${data.pieces.length} pieces. Your current build will be replaced.`, buttons: [{ label: 'Open it', value: 'yes', kind: 'primary' }] });
+      const ok = await ask({ icon: '📬', title: 'Open this home?', text: `It has ${piecesTxt}. Your current build will be replaced — Undo brings it back.`, buttons: [{ label: 'Open it', value: 'yes', kind: 'primary' }] });
       if (ok !== 'yes') return;
     }
-    if (app.blueprints?.active?.()) stopGuides();
-    app.loadBuild(data);
+    swapInBuild(data);
     closeSheet(false);
     sfx('success');
-    const n = data.pieces.length, piecesTxt = `${n} piece${n === 1 ? '' : 's'}`;
     toast(data.dropped
       ? `📬 Opened a home with ${piecesTxt} (${data.dropped} couldn’t be used)`
       : `📬 Opened a home with ${piecesTxt}`, data.dropped ? 'info' : 'success', data.dropped ? 3600 : 2400);
@@ -1446,6 +1554,8 @@ export function init(app) {
       if (popOpen && pop.classList.contains('hw-pop-palette') && has('pieceId', 'tool')) closePop();
       renderCtx();
     }
+    // the paint panel just opened (or its material strip came back): start the strip on a useful group
+    if (state.tool === 'paint' && (has('tool') || (has('paintTarget') && state.paintTarget !== 'accent'))) pmJump = state.paintMat ? 'sel' : paintGroupFor();
     if (has('tool', 'paintMat', 'paintColor', 'paintTarget')) renderPaint();
     if (has('tool') && state.tool === 'paint' && !state.paintMat && !state.paintColor) {
       queueMicrotask(() => state.set({ paintColor: PALETTE[4] || '#b4473a' }));
@@ -1461,6 +1571,7 @@ export function init(app) {
   events.on('world-change', (d) => {
     renderHistory();
     renderCount();
+    if (d?.kind === 'undo') afterUndo();
     if (page === 'main' && d?.kind !== 'add' && d?.kind !== 'remove') refreshPage();
   });
   events.on('toast', (d) => {
@@ -1522,6 +1633,7 @@ export function init(app) {
   renderHistory();
   renderCount();
   renderCtx();
+  if (state.tool === 'paint') pmJump = state.paintMat ? 'sel' : paintGroupFor();
   renderPaint();
   if (state.photoMode) setPhotoMode(true);
   try { if (app.blueprints?.active?.()) { const a = app.blueprints.active(); bp = { id: typeof a === 'string' ? a : (a?.id || state.blueprint), done: 0, total: 0 }; renderHud(); } } catch { /* ignore */ }

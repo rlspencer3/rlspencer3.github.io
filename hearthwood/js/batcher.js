@@ -19,16 +19,22 @@
 //   piece out of the merged buffers (its triangles collapse to a point; partial GPU upload) and puts it back
 //   on layer 0, so new pieces, pop-in / pop-out tweens and paint render on their own right away while the
 //   rest stays batched. A touched unit is rebaked (time-sliced, ≤ budget ms per frame) once it has been
-//   quiet for `quiet` seconds and none of its pieces is scaled or tweening. Only units whose material /
-//   region the change touched are rebaked.
+//   quiet for `quiet` seconds. Only units whose material / region the change touched are rebaked.
+// * Pieces that are not SETTLED when their unit is baked — tweening, scaled (≠ 1) or with their inner group
+//   hidden (a blueprint cascade keeps waiting pieces at scale 0.001, inner group hidden) — are left out of
+//   that bake and keep rendering on their own (layer 0). They wait in `pending`; at most every
+//   `settleEvery` seconds, when the baker has nothing else ready, the ones that have settled since are
+//   folded in (their units rebake at once, shadow units first). So a long cascade costs a few rebakes
+//   instead of every stamped piece drawing on its own until the very last one has landed.
 // * Transparent materials (window glass…), userData.noMerge meshes and anything unusual (custom render
 //   hooks, extra vertex attributes, mirrored transforms…) are never merged: they stay on layer 0.
 // * Anything that animates a piece's object outside world mutations should use effects tweens (detected
 //   automatically) or call world.batcher.wake(entry.obj); scale changes on baked pieces are detected too.
 //
-// Invariant: a mesh on LAYER_BAKED whose shadow goes through a proxy is always inside a baked proxy
-// (render units only take such meshes once their shadow unit is baked; punching always removes a piece from
-// every unit at once).
+// Invariants: a mesh is inside a baked render unit exactly when it sits on LAYER_BAKED (so nothing is drawn
+// twice or not at all); a mesh on LAYER_BAKED whose shadow goes through a proxy is always inside a baked
+// proxy (render units only take such meshes once their shadow unit is baked; punching always removes a piece
+// from every unit at once); a baked piece is always settled (anything else is punched out every frame).
 
 import * as THREE from 'three';
 import { MAX_LEVEL, GRID_MIN } from './config.js';
@@ -36,7 +42,7 @@ import { MAX_LEVEL, GRID_MIN } from './config.js';
 export const LAYER_BAKED = 1;    // source meshes of baked units: raycastable, never rendered
 export const LAYER_SHADOW = 2;   // shadow proxies: seen by shadow cameras only
 
-const NL = MAX_LEVEL + 1;
+const NL = MAX_LEVEL + 2;      // cutaway levels: 0..MAX_LEVEL, plus a roof over the top floor's walls (world entry.level)
 const MASK_LIVE = 1;
 const MASK_BAKED = 1 << LAYER_BAKED;
 const BASE_ATTRS = { position: true, normal: true, uv: true };
@@ -77,7 +83,7 @@ export class Batcher {
    * @param {World} world
    * @param {THREE.Scene} scene
    * @param {object} [opts] size (shadow region, cells, default 8) · splitVerts · splitSize · quiet (s) ·
-   *   budget (ms/frame) · enabled · shadowProxies · batchTransparent
+   *   settleEvery (s) · budget (ms/frame) · enabled · shadowProxies · batchTransparent
    */
   constructor(world, scene, opts = {}) {
     this.world = world;
@@ -91,6 +97,7 @@ export class Batcher {
     this.splitVerts = opts.splitVerts || 131072;        // a whole-lot material batch bigger than this is split…
     this.splitSize = opts.splitSize || 10;              // …into regions of this many cells (lot quadrants)
     this.quiet = opts.quiet ?? 0.5;                     // seconds a unit must be untouched before rebaking
+    this.settleEvery = opts.settleEvery ?? 0.25;        // seconds between folding settled pieces into batches
     this.budget = opts.budget ?? (coarse ? 4 : 6);      // ms of baking work per frame
     this.enabled = opts.enabled !== false;
     this.shadowProxies = opts.shadowProxies !== false;
@@ -102,11 +109,13 @@ export class Batcher {
     this.inProxy = new WeakSet();                       // source meshes whose shadow a baked proxy draws
     this.split = new Set();                             // material ids batched per region instead of whole-lot
     this.dirty = new Set();
+    this.pending = new Set();                           // entries left out of a bake because they were not settled
     this.job = null;
     this.viewLevel = MAX_LEVEL;
     this.seeAll = true;
     this.changed = false;                               // baked / unbaked since the last update() → shadow refresh
-    this._anim = new Set();
+    this._anim = new Set();                             // objects effects tweens animate (refreshed every update)
+    this._sweepAt = -Infinity;
     this._lightTick = 0;
     this._msPerVert = 0.0001;                           // running estimate of copy cost (keeps slices in budget)
     this.stat = { bakes: 0, totalMs: 0, lastMs: 0, maxBakeMs: 0, maxSliceMs: 0, punches: 0, splits: 0 };
@@ -137,7 +146,10 @@ export class Batcher {
 
   /** Make a piece render on its own right now (call before animating entry.obj outside world mutations). */
   wake(obj) {
-    return this._punch(obj);
+    const punched = this._punch(obj);
+    // a bake in progress that copied this piece must not swap it in: start that unit over after the quiet period
+    if (this.job && this.job.objs.has(obj)) this._touch(this.job.unit);
+    return punched;
   }
 
   /** Forget every bake and unit (world cleared / about to load). */
@@ -145,6 +157,7 @@ export class Batcher {
     this._unbakeAll();
     this.units.clear();
     this.dirty.clear();
+    this.pending.clear();
     this.entryUnits = new WeakMap();
     this.split.clear();
   }
@@ -152,6 +165,7 @@ export class Batcher {
   /** Bake touched units as soon as possible (skip the quiet period), e.g. after a load. */
   flush() {
     for (const u of this.dirty) u.dirtyAt = -Infinity;
+    this._sweepAt = -Infinity;
   }
 
   setEnabled(on) {
@@ -176,14 +190,13 @@ export class Batcher {
   /** Advance baking. Returns true when the baked set changed since the last call (refresh shadow maps). */
   update() {
     if (this.enabled) {
-      // safety net: a baked piece that is tweening or rescaled must render on its own
-      const tw = this.effects?.tweens;
-      if (tw) for (let i = 0; i < tw.length; i++) if (this.recs.has(tw[i].obj)) this._punch(tw[i].obj);
+      const anim = this._animSet();
+      // safety net: a baked piece that is tweening, rescaled or hidden must render on its own
+      for (const o of anim) if (this.recs.has(o)) this._punch(o);
       for (const e of this.world.entries.values()) {
-        const s = e.obj.scale;
-        if ((s.x !== 1 || s.y !== 1 || s.z !== 1) && this.recs.has(e.obj)) this._punch(e.obj);
+        if (!this._still(e.obj) && this.recs.has(e.obj)) this._punch(e.obj);
       }
-      if (this.dirty.size || this.job) this._work(this.budget);
+      if (this.dirty.size || this.job || this.pending.size) this._work(this.budget, anim);
       if (++this._lightTick >= 90) { this._lightTick = 0; this._scanLights(); }
     }
     const ch = this.changed;
@@ -196,7 +209,7 @@ export class Batcher {
     if (!this.enabled) return 0;
     if (ignoreQuiet) this.flush();
     const before = this.stat.bakes;
-    this._work(Infinity);
+    this._work(Infinity, this._animSet());
     return this.stat.bakes - before;
   }
 
@@ -222,8 +235,58 @@ export class Batcher {
     for (const e of this.world.entries.values()) { entries++; if (!this.recs.has(e.obj)) live++; }
     return {
       enabled: this.enabled, units: this.units.size, bakedUnits: baked, dirty: this.dirty.size, busy: !!this.job,
-      meshes: render, proxies, verts, entries, liveEntries: live, split: this.split.size, ...this.stat,
+      pending: this.pending.size, meshes: render, proxies, verts, entries, liveEntries: live, split: this.split.size, ...this.stat,
     };
+  }
+
+  // ------------------------------------------------------------------ settled pieces
+
+  /** Objects animated by effects tweens right now (one shared set, rebuilt per call). */
+  _animSet() {
+    const anim = this._anim;
+    anim.clear();
+    const tw = this.effects?.tweens;
+    if (tw) for (let i = 0; i < tw.length; i++) anim.add(tw[i].obj);
+    return anim;
+  }
+
+  /** Full scale and look shown (a blueprint cascade hides the inner group of pieces waiting for their pop-in). */
+  _still(obj) {
+    const s = obj.scale;
+    if (s.x !== 1 || s.y !== 1 || s.z !== 1) return false;
+    const inner = obj.children[0];
+    return !inner || inner.visible !== false;
+  }
+
+  /** May this piece be baked now? (still, and no tween on it) */
+  _settled(obj, anim) {
+    return this._still(obj) && !anim.has(obj);
+  }
+
+  /**
+   * Fold pending pieces that have settled into their batches: their units (the ones that don't hold them yet)
+   * become ready right away. Runs only when the baker has nothing else ready, at most every `settleEvery`
+   * seconds, so pieces landing one after another are folded in a few at a time. Returns true if any unit
+   * was marked.
+   */
+  _sweep(t, anim) {
+    if (!this.pending.size || t - this._sweepAt < this.settleEvery * 1000) return false;
+    this._sweepAt = t;
+    let marked = false;
+    for (const e of this.pending) {
+      const us = this.entryUnits.get(e);
+      if (!us) { this.pending.delete(e); continue; }       // removed from the world meanwhile
+      if (!this._settled(e.obj, anim)) continue;
+      this.pending.delete(e);
+      for (const u of us) {
+        if (u.dirty || u.objs.has(e.obj)) continue;      // already holds it, or rebakes soon anyway
+        u.dirty = true;
+        u.dirtyAt = -Infinity;
+        this.dirty.add(u);
+        marked = true;
+      }
+    }
+    return marked;
   }
 
   // ------------------------------------------------------------------ units & membership
@@ -266,12 +329,14 @@ export class Batcher {
 
   _unitsFor(entry) {
     const out = [];
-    if (entry.obj) this._scan(entry.obj, true, entry.p, out);
+    if (entry.obj) this._scan(entry.obj, 0, entry.p, out);
     return out;
   }
 
-  _scan(o, isRoot, p, out) {
-    if (!isRoot && o.visible === false) return;            // hidden sub-part: leave it alone
+  _scan(o, depth, p, out) {
+    // a hidden sub-part is left alone; the wrapper (level cutaway) and its inner group (a piece waiting in a
+    // blueprint cascade) count anyway: the piece joins those units once it is shown
+    if (depth > 1 && o.visible === false) return;
     if (o.isMesh && this._eligible(o, false)) {
       const u = this._unit(this._rkey(o, p), 'r', o);
       if (!out.includes(u)) out.push(u);
@@ -282,7 +347,7 @@ export class Batcher {
       }
     }
     const ch = o.children;
-    for (let i = 0; i < ch.length; i++) this._scan(ch[i], false, p, out);
+    for (let i = 0; i < ch.length; i++) this._scan(ch[i], depth + 1, p, out);
   }
 
   /** Recompute a piece's units (its object or the split set changed). Touches old and new units. */
@@ -385,24 +450,18 @@ export class Batcher {
 
   // ------------------------------------------------------------------ baking
 
-  _work(budget) {
+  _work(budget, anim) {
     const t0 = now();
     const deadline = t0 + budget;
-    let anim = null;
     for (;;) {
       let t = now();
       if (!this.job) {
         if (t > t0 && deadline - t < budget * 0.25) break;   // not worth starting another unit this frame
-        if (!anim) {
-          anim = this._anim;
-          anim.clear();
-          const tw = this.effects?.tweens;
-          if (tw) for (let i = 0; i < tw.length; i++) anim.add(tw[i].obj);
-        }
-        const u = this._nextReady(anim);
+        let u = this._nextReady(t);
+        if (!u && this._sweep(t, anim)) u = this._nextReady(t);
         if (!u) break;
         this.dirty.delete(u);
-        this.job = this._collect(u);
+        this.job = this._collect(u, anim);
         const t2 = now();
         if (this.job) this.job.ms += t2 - t;
         t = t2;
@@ -418,7 +477,7 @@ export class Batcher {
       // the swap is cheap but not free: leave it for the next frame when out of time
       if (job.done && (t < deadline || job.ms === 0)) {
         this.job = null;
-        this._commit(job);
+        this._commit(job, anim);
         job.ms += now() - t;
         this.stat.bakes++;
         this.stat.lastMs = job.ms;
@@ -431,25 +490,22 @@ export class Batcher {
     if (dt > this.stat.maxSliceMs && budget !== Infinity) this.stat.maxSliceMs = dt;
   }
 
-  _quietAndStill(u, t, q, anim) {
-    if (t - u.dirtyAt < q) return false;
-    for (const e of u.entries) {
-      const s = e.obj.scale;
-      if (s.x !== 1 || s.y !== 1 || s.z !== 1 || anim.has(e.obj)) {
-        u.dirtyAt = Math.max(u.dirtyAt, t - q + 100);   // still animating: look again in 0.1 s
-        return false;
-      }
-    }
-    return true;
-  }
-
-  /** Shadow units first; a proxied render unit waits until the shadow units of its pieces are baked. */
-  _nextReady(anim) {
-    const t = now(), q = this.quiet * 1000;
-    for (const u of this.dirty) if (u.kind === 's' && this._quietAndStill(u, t, q, anim)) return u;
+  /**
+   * Next unit to bake: quiet for `quiet` seconds; shadow units first; a proxied render unit waits while a
+   * shadow unit of its pieces is dirty (it would leave those pieces live and need another bake). Pieces that
+   * are still animating don't hold a unit back: the bake leaves them out (see _collect / _sweep).
+   */
+  _nextReady(t) {
+    const q = this.quiet * 1000;
+    let sDirty = false;
     for (const u of this.dirty) {
-      if (u.kind !== 'r' || !this._quietAndStill(u, t, q, anim)) continue;
-      if (u.mode === 'p' && !this._coverReady(u)) continue;
+      if (u.kind !== 's') continue;
+      if (t - u.dirtyAt >= q) return u;
+      sDirty = true;
+    }
+    for (const u of this.dirty) {
+      if (u.kind !== 'r' || t - u.dirtyAt < q) continue;
+      if (sDirty && u.mode === 'p' && !this._coverReady(u)) continue;
       return u;
     }
     return null;
@@ -497,7 +553,8 @@ export class Batcher {
           const total = geo.index ? geo.index.count : geo.attributes.position.count;
           const ds = Math.max(0, geo.drawRange.start | 0);
           const count = Math.max(0, Math.min(total, ds + geo.drawRange.count) - ds);
-          job.items.push({ obj: e.obj, mesh: o, lvl, ds, count, start: 0 });
+          job.items.push({ e, obj: e.obj, mesh: o, lvl, ds, count, start: 0 });
+          job.objs.add(e.obj);
           job.counts[lvl] += count;
           job.total += count;
         }
@@ -507,16 +564,21 @@ export class Batcher {
     for (let i = 0; i < ch.length; i++) this._gather(ch[i], false, e, lvl, job);
   }
 
-  /** Snapshot a unit: which meshes go where (cheap); the vertex copying happens in _step. */
-  _collect(u) {
+  /**
+   * Snapshot a unit: which meshes go where (cheap); the vertex copying happens in _step. Pieces that are not
+   * settled (tweening, scaled, inner group hidden) are left out: they keep rendering on their own and wait in
+   * `pending` until they settle (see _sweep).
+   */
+  _collect(u, anim) {
     const job = {
-      unit: u, items: [], counts: new Int32Array(NL), levelEnd: new Int32Array(NL), total: 0, uncovered: false,
-      ii: 0, w: 0, pos: null, nor: null, uv: null, done: false, ms: 0,
+      unit: u, items: [], objs: new Set(), skipped: [], counts: new Int32Array(NL), levelEnd: new Int32Array(NL),
+      total: 0, uncovered: false, ii: 0, w: 0, pos: null, nor: null, uv: null, done: false, ms: 0,
       x0: Infinity, y0: Infinity, z0: Infinity, x1: -Infinity, y1: -Infinity, z1: -Infinity,
     };
     for (const e of u.entries) {
       const obj = e.obj;
       if (!obj) continue;
+      if (!this._settled(obj, anim)) { job.skipped.push(e); continue; }
       obj.updateWorldMatrix(true, true);
       this._gather(obj, true, e, Math.min(NL - 1, Math.max(0, e.level | 0)), job);
     }
@@ -629,12 +691,23 @@ export class Batcher {
     }
   }
 
-  _commit(job) {
+  _commit(job, anim) {
     const u = job.unit;
     const oldObjs = u.kind === 's' && u.objs.size ? [...u.objs] : null;
     this._release(u);
     u.dirty = false;
     u.needsCover = job.uncovered;
+    for (const e of job.skipped) this.pending.add(e);
+    // a piece that started animating while this job was copying stays live: collapse its copy, don't record it
+    let late = null;
+    for (const obj of job.objs) if (!this._settled(obj, anim)) (late || (late = new Set())).add(obj);
+    if (late) {
+      for (const it of job.items) {
+        if (!late.has(it.obj)) continue;
+        job.pos.fill(0, it.start * 3, (it.start + it.count) * 3);
+        this.pending.add(it.e);
+      }
+    }
     if (job.total) {
       const geo = new THREE.BufferGeometry();
       const P = new THREE.BufferAttribute(job.pos, 3);
@@ -667,6 +740,7 @@ export class Batcher {
       // records: which piece meshes this batch now draws
       let lastObj = null, parts = null;
       for (const it of job.items) {
+        if (late && late.has(it.obj)) continue;
         if (it.obj !== lastObj) {
           lastObj = it.obj;
           let rec = this.recs.get(it.obj);

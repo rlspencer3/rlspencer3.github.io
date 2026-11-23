@@ -3,7 +3,7 @@
 // loaded with dynamic import so one failing module never blanks the whole game.
 
 import * as THREE from 'three';
-import { CELL, levelY, MAX_LEVEL } from './config.js';
+import { CELL, LEVEL_H, STEP, levelY, MAX_LEVEL, clamp } from './config.js';
 import { state, events } from './state.js';
 import * as catalog from './catalog.js';
 import * as materials from './materials.js';
@@ -16,6 +16,17 @@ import { thumbnail } from './thumbs.js';
 
 const params = new URLSearchParams(location.search);
 const errors = [];
+
+/** Dev URL params, validated: a missing or malformed value gives undefined (and is then ignored). */
+const NUM_RE = /^\s*-?(?:\d+\.?\d*|\.\d+)\s*$/;
+function numParam(name) {
+  const s = params.get(name);
+  return s !== null && NUM_RE.test(s) ? Number(s) : undefined;
+}
+function intParam(name, lo = -Infinity, hi = Infinity) {
+  const n = numParam(name);
+  return Number.isInteger(n) && n >= lo && n <= hi ? n : undefined;
+}
 
 function reportError(where, e) {
   console.error(`[hearthwood] ${where}:`, e);
@@ -68,14 +79,16 @@ fallbackGround.rotation.x = -Math.PI / 2;
 fallbackGround.receiveShadow = true;
 scene.add(fallbackGround);
 
-// ?batch=0 turns static batching off (A/B checks); ?batchsize=n sets the shadow-proxy region edge in cells;
-// ?batchglass=1 also merges transparent materials (fewer draw calls, but glass is then sorted per batch)
+// ?batch=0 turns static batching off (A/B checks); ?batchsize=n (1..20) sets the shadow-proxy region edge in
+// cells; ?batchglass=1 also merges transparent materials (fewer draw calls, but glass is then sorted per batch)
 const world = new World(scene, {
   batch: params.get('batch') === '0' ? false : {
-    size: parseInt(params.get('batchsize'), 10) || undefined,
+    size: intParam('batchsize', 1, 20),
     batchTransparent: params.get('batchglass') === '1',
   },
 });
+// phones keep fewer unused piece templates (undo / repaint / ghost looks) around: less memory in long sessions
+if (MOBILE) world.maxIdleTemplates = lowEnd ? 60 : 80;
 const rig = new CameraRig(camera, renderer.domElement);
 rig.drawMode = state.drawMode;
 const effects = new Effects(scene);
@@ -99,11 +112,12 @@ const app = {
     c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
     return c.toDataURL(type, quality);
   },
-  /** Load build data (pieces) and optionally a camera view. */
+  /** Load build data (pieces) and its camera view; data without one (share codes) gets a view framing the build. */
   loadBuild(data, { record = false } = {}) {
     const n = world.load(data, { record });
     state.set({ level: 0, seeAll: true, hOffset: 0 });
-    if (data?.cam) rig.setView(data.cam);
+    const view = data?.cam || frameView();
+    if (view) rig.setView(view);
     return n;
   },
   newBuild() {
@@ -111,6 +125,61 @@ const app = {
   },
 };
 window.__hw = app;
+
+/**
+ * A view of the build (its house: garden scenery is left out when there is anything else) from the usual
+ * three-quarter angle, as close as keeps its grid box inside the part of the screen the UI leaves free.
+ * null when the lot is empty.
+ */
+function frameView() {
+  let all = null, house = null;
+  const grow = (b, x0, x1, z0, z1, y1) => {
+    if (!b) return { x0, x1, z0, z1, y1 };
+    b.x0 = Math.min(b.x0, x0); b.x1 = Math.max(b.x1, x1); b.z0 = Math.min(b.z0, z0); b.z1 = Math.max(b.z1, z1);
+    b.y1 = Math.max(b.y1, y1);
+    return b;
+  };
+  for (const { p, def } of world.entries.values()) {
+    const x0 = p.x * CELL, z0 = p.z * CELL;
+    const x1 = x0 + (def.slot === 'cell' || (def.slot === 'edge' && p.a !== 'z') ? CELL : 0);
+    const z1 = z0 + (def.slot === 'cell' || (def.slot === 'edge' && p.a === 'z') ? CELL : 0);
+    const rise = def.roof ? def.roof.rise || 0 : p.s || 0;                 // roofs and gables reach higher
+    const y1 = levelY(p.y) + Math.max(LEVEL_H, ((p.h || 0) + rise) * STEP);
+    all = grow(all, x0, x1, z0, z1, y1);
+    if (def.cat !== 'garden') house = grow(house, x0, x1, z0, z1, y1);
+  }
+  const b = house || all;
+  if (!b) return null;
+  const T = new THREE.Vector3((b.x0 + b.x1) / 2, clamp(b.y1 * 0.4, 1, 6), (b.z0 + b.z1) / 2);
+  // look at the front (+Z, as the blueprints do), turning the short way round from the current view
+  const TAU = Math.PI * 2;
+  const th = 0.55 + TAU * Math.round((rig.goal.theta - 0.55) / TAU), ph = 1.1;
+  // the screen area the UI leaves free, in NDC of the camera without the rig's view offset (camera.js shifts
+  // the view so the target sits in the middle of that area), less a small margin
+  const w = renderer.domElement.clientWidth || 1, h = renderer.domElement.clientHeight || 1;
+  const I = rig.insets || { top: 0, bottom: 0, left: 0, right: 0 };
+  const oy = clamp((I.bottom - I.top) / 2, -h * 0.25, h * 0.25), ox = clamp((I.right - I.left) / 2, -w * 0.15, w * 0.15);
+  let yHi = 1 - (2 * (I.top + oy)) / h, yLo = -1 + (2 * (I.bottom - oy)) / h;
+  let xHi = 1 - (2 * (I.right - ox)) / w, xLo = -1 + (2 * (I.left + ox)) / w;
+  const my = (yHi - yLo) * 0.06, mx = (xHi - xLo) * 0.06;
+  yHi -= my; yLo += my; xHi -= mx; xLo += mx;
+  const cam = camera.clone();
+  cam.clearViewOffset();
+  const v = new THREE.Vector3(), sp = Math.sin(ph);
+  let r = rig.minRadius;
+  for (; r < rig.maxRadius; r *= 1.05) {
+    cam.position.set(T.x + r * sp * Math.sin(th), Math.max(0.6, T.y + r * Math.cos(ph)), T.z + r * sp * Math.cos(th));
+    cam.lookAt(T);
+    cam.updateMatrixWorld();
+    let inside = true;
+    for (let i = 0; i < 8 && inside; i++) {
+      v.set(i & 1 ? b.x1 : b.x0, i & 2 ? b.y1 : 0, i & 4 ? b.z1 : b.z0).project(cam);
+      inside = v.z < 1 && v.x > xLo && v.x < xHi && v.y > yLo && v.y < yHi;
+    }
+    if (inside) break;
+  }
+  return { t: [T.x, T.y, T.z], th, ph, r };
+}
 
 app.builder = new Builder(app);
 
@@ -154,35 +223,54 @@ async function boot() {
   // starting content
   const showcase = params.get('showcase');
   const bp = params.get('bp');
+  let restored = false;      // the autosave was loaded
   if (showcase) buildShowcase(showcase);
   else if (bp && app.blueprints?.stamp) {
     app.blueprints.stamp(bp, { animate: false, record: false });
   } else if (params.get('clean') !== '1') {
     const saved = storage.loadAutosave();
-    if (saved?.pieces?.length) app.loadBuild(saved);
+    if (saved?.pieces?.length) { app.loadBuild(saved); restored = true; }
     else if (app.blueprints?.welcome) app.blueprints.welcome();
   }
   world.batcher.flush();     // starting content: bake on the next frames (no quiet period)
-  // dev URL params (validated: a bad value is ignored rather than poisoning state)
-  const tq = parseFloat(params.get('time'));
-  if (Number.isFinite(tq)) state.set({ time: ((tq % 1) + 1) % 1 });
+  // dev URL params (validated: a malformed value is ignored rather than poisoning state)
+  const tq = numParam('time');
+  if (tq !== undefined) state.set({ time: ((tq % 1) + 1) % 1 });
   const sq = params.get('season');
   if (['spring', 'summer', 'autumn', 'winter'].includes(sq)) state.set({ season: sq });
-  if (params.get('level')) state.set({ level: Math.max(0, Math.min(MAX_LEVEL, parseInt(params.get('level'), 10) || 0)) });
+  const lq = intParam('level');
+  if (lq !== undefined) state.set({ level: clamp(lq, 0, MAX_LEVEL) });
   if (params.get('seeAll')) state.set({ seeAll: params.get('seeAll') === '1' });
   if (params.get('cam')) {
-    const [th, ph, r, tx, ty, tz] = params.get('cam').split(',').map(Number);
-    rig.setView({ t: [tx || 0, ty || 1, tz || 0], th, ph, r }, true);   // non-finite values: ignored by setView
+    // theta,phi,radius[,tx,ty,tz]: a malformed view is ignored by setView (and clamped to the rig's limits)
+    const c = params.get('cam').split(',').map((s) => (NUM_RE.test(s) ? Number(s) : NaN));
+    const or = (n, d) => (Number.isFinite(n) ? n : d);
+    rig.setView({ t: [or(c[3], 0), or(c[4], 1), or(c[5], 0)], th: c[0], ph: c[1], r: c[2] }, true);
   }
   rig.snap();
 
-  // autosave (debounced)
-  let saveTimer = null;
-  events.on('world-change', () => {
-    if (showcase || params.get('nosave') === '1') return;
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => storage.autosave(world.serialize(), rig.getView()), 800);
-  });
+  // autosave: debounced after world changes, and flushed (with the camera view) when the page is hidden or
+  // closed, so a piece placed just before the player leaves, or a new look at the house, is never lost
+  if (!showcase && params.get('nosave') !== '1') {
+    let saveTimer = null;
+    let savedView = restored ? JSON.stringify(rig.getView()) : null;   // view in the stored autosave
+    const saveNow = () => {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+      try {
+        const view = rig.getView();
+        if (storage.autosave(world.serialize(), view)) savedView = JSON.stringify(view);   // storage full / blocked: warned once
+      } catch (e) { reportError('autosave', e); }
+    };
+    events.on('world-change', () => {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(saveNow, 800);
+    });
+    // a camera-only change is written too, but only over an autosave of this build (never over the first-visit lot)
+    const flush = () => { if (saveTimer !== null || (savedView !== null && JSON.stringify(rig.getView()) !== savedView)) saveNow(); };
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
+  }
 
   setLoading('Welcome home', 1);
   const loading = document.getElementById('loading');

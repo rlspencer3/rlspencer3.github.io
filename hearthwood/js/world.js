@@ -12,6 +12,18 @@ import { Batcher, LAYER_BAKED } from './batcher.js';
 
 const HALF_PI = Math.PI / 2;
 const RECORD_FIELDS = ['t', 'x', 'y', 'z', 'a', 'r', 'h', 's', 'm', 'c', 'k'];
+/**
+ * Highest roof panel base (half-steps above BASE_Y). Records stop at y = MAX_LEVEL, so a roof over the top
+ * floor's walls is y = MAX_LEVEL with h = 2 (a storey) + its rows; storage accepts h up to 12.
+ */
+const MAX_ROOF_HS = 2 * MAX_LEVEL + 12;
+
+/** Player-facing reason for a piece on a floor it can't go on (floors are "Floor 1".."Floor 5" in the UI). */
+function floorReason(lo, hi, y) {
+  if (lo === hi) return lo === 0 ? 'Ground floor only' : `Only on Floor ${lo + 1}`;
+  if (y < lo) return lo === 1 ? 'Not on the ground floor' : `Only from Floor ${lo + 1} up`;
+  return hi === MAX_LEVEL - 1 ? 'Not on the top floor' : `Only up to Floor ${hi + 1}`;
+}
 
 /** Strip runtime fields and defaults so records stay small in saves. */
 export function compact(p) {
@@ -36,6 +48,11 @@ export class World {
     this.root.name = 'world';
     scene.add(this.root);
     this.entries = new Map();      // key -> { key, p, def, obj, level }
+    // Roof panels on top-floor records (y = MAX_LEVEL). Their cutaway level depends on the roof they belong to:
+    // a roof over the top floor's walls is stored lifted a storey (h ≥ 2) and hides above that floor (level
+    // MAX_LEVEL + 1); see _relevelTopRoofs.
+    this._topRoofs = new Set();
+    this._topRoofsDirty = false;
     this.undoStack = [];
     this.redoStack = [];
     this._batch = null;
@@ -99,7 +116,7 @@ export class World {
     const def = getDef(p.t);
     if (!def) return { ok: false, reason: 'Unknown piece' };
     const [lo, hi] = def.levels;
-    if (p.y < lo || p.y > hi) return { ok: false, reason: lo === hi ? `Only on level ${lo + 1}` : 'Not on this level' };
+    if (p.y < lo || p.y > hi) return { ok: false, reason: floorReason(lo, hi, p.y) };
     if (def.slot === 'cell') {
       if (!inGrid(p.x, p.z)) return { ok: false, reason: 'Outside the lot' };
     } else if (def.slot === 'corner') {
@@ -113,7 +130,7 @@ export class World {
     }
     if (def.layer === 'R') {
       const hs = roofSteps(p);
-      if (hs < 0 || hs > (MAX_LEVEL + 2) * 2) return { ok: false, reason: 'Too high' };
+      if (hs < 0 || hs > MAX_ROOF_HS) return { ok: false, reason: '☁️ That’s as high as roofs go' };
     }
     if (def.canPlace) {
       const r = def.canPlace(p, this.ctxFor(p, def));
@@ -239,6 +256,7 @@ export class World {
     const obj = this._buildEntryObj(p, def, key);
     this._useTpl(obj.userData.sig, 1);
     const entry = { key, p, def, obj, level: p.y };
+    if (def.layer === 'R' && p.y === MAX_LEVEL) { this._topRoofs.add(entry); this._topRoofsDirty = true; }
     obj.visible = this._levelVisible(entry);
     this.root.add(obj);
     this.entries.set(key, entry);
@@ -247,6 +265,7 @@ export class World {
   }
 
   _unmount(entry) {
+    if (this._topRoofs.delete(entry)) this._topRoofsDirty = true;
     this.batcher.remove(entry);
     this.root.remove(entry.obj);
     this.entries.delete(entry.key);
@@ -439,6 +458,7 @@ export class World {
   }
 
   _changed(kind, p, prev) {
+    this._relevelTopRoofs();
     this.version++;
     if (this._tplIdle.size > this.maxIdleTemplates) this._trimTemplates();
     events.emit('world-change', { kind, p, prev, count: this.entries.size });
@@ -473,6 +493,7 @@ export class World {
     }
     // contextual pieces need neighbours present: rebuild them all once
     for (const e of this.entries.values()) if (e.def.contextual) this._remountInPlace(e);
+    this._relevelTopRoofs();
     this.batcher.flush();          // bake on the next frames, no quiet period
     if (opts.record) this._record(ops, opts);
     else {
@@ -489,6 +510,55 @@ export class World {
 
   _levelVisible(entry) {
     return this.seeAll || entry.level <= this.viewLevel;
+  }
+
+  /**
+   * Cutaway level of the roof panels on top-floor records (y = MAX_LEVEL). A roof over Floor 4's walls starts
+   * at h = 0; one over the top floor's walls is stored lifted a storey (h ≥ 2). Its upper rows can't be told
+   * apart from the upper rows of a big Floor-4 roof one by one, so panels are grouped into roofs (panels in
+   * neighbouring cells, diagonals too, that touch: one's span h..h + rise meets the other's): a roof whose
+   * lowest panel is a storey up hides with the floors above the top floor (level MAX_LEVEL + 1), so the top
+   * floor's rooms can be seen in a cutaway. A roof touching a Floor-4 roof stays at MAX_LEVEL (shown with
+   * that floor, as before). Runs after a change that added or removed such a panel.
+   */
+  _relevelTopRoofs() {
+    if (!this._topRoofsDirty) return;
+    this._topRoofsDirty = false;
+    if (!this._topRoofs.size) return;
+    const byCell = new Map();      // "x|z" -> [entry…]
+    for (const e of this._topRoofs) {
+      const k = e.p.x + '|' + e.p.z, list = byCell.get(k);
+      if (list) list.push(e); else byCell.set(k, [e]);
+    }
+    const seen = new Set();
+    for (const e0 of this._topRoofs) {
+      if (seen.has(e0)) continue;
+      seen.add(e0);
+      const roof = [e0];
+      let low = Infinity;
+      for (let i = 0; i < roof.length; i++) {
+        const q = roof[i].p, h = q.h || 0, top = h + (roof[i].def.roof?.rise ?? 1);
+        if (h < low) low = h;
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dz = -1; dz <= 1; dz++) {
+            const list = byCell.get((q.x + dx) + '|' + (q.z + dz));
+            if (!list) continue;
+            for (const n of list) {
+              if (seen.has(n)) continue;
+              const nh = n.p.h || 0;
+              if (nh <= top && h <= nh + (n.def.roof?.rise ?? 1)) { seen.add(n); roof.push(n); }
+            }
+          }
+        }
+      }
+      const level = low >= 2 ? MAX_LEVEL + 1 : MAX_LEVEL;
+      for (const e of roof) {
+        if (e.level === level) continue;
+        e.level = level;
+        e.obj.visible = this._levelVisible(e);
+        this.batcher.wake(e.obj);    // out of its batches now; rebaked with its vertices at the new level
+      }
+    }
   }
 
   setView(level, seeAll) {
