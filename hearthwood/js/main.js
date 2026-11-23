@@ -81,6 +81,7 @@ const app = {
   /** Load build data (pieces) and optionally a camera view. */
   loadBuild(data, { record = false } = {}) {
     const n = world.load(data, { record });
+    state.set({ level: 0, seeAll: true, hOffset: 0 });
     if (data?.cam) rig.setView(data.cam);
     return n;
   },
@@ -205,11 +206,13 @@ state.on((changed) => {
   }
 });
 
-const clock = new THREE.Clock();
+let lastT = performance.now();
 let fpsAcc = 0, fpsFrames = 0;
 app.fps = 60;
 function frame() {
-  const dt = Math.min(clock.getDelta(), 0.1);
+  const now = performance.now();
+  const dt = Math.min((now - lastT) / 1000, 0.1);
+  lastT = now;
   rig.update(dt);
   effects.update(dt);
   try { app.env?.update?.(dt); } catch (e) { reportError('env.update', e); app.env.update = null; }

@@ -62,7 +62,8 @@ function renderOne(world, id, rec) {
   const def = getDef(id);
   if (!def) return '';
   if (!renderer) setup();
-  const p = world.normalize({ t: id, x: 0, y: 0, z: 0, a: 'x', ...(def.thumb || {}), ...rec });
+  // far outside the lot so contextual pieces see no neighbours
+  const p = world.normalize({ t: id, x: 500, y: 0, z: 500, a: 'x', ...(def.thumb || {}), ...rec });
   if (!p) return '';
   const obj = world.buildLocal(p);
   scene.add(obj);

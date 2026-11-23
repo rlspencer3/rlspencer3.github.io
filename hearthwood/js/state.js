@@ -13,7 +13,7 @@ const defaults = {
   rot: 0,               // rotation for cell pieces (0..3); edge pieces use 0|2 (flip)
   hOffset: 0,           // manual roof height nudge in half steps (added to auto height)
   drawMode: false,      // false: one-finger drag orbits; true: one-finger drag paints pieces
-  seeAll: false,        // show levels above the active one
+  seeAll: true,         // show levels above the active one (stepping down a level turns this off = cutaway)
   // Remembered material / colours, keyed by def.matGroup (e.g. 'wall', 'roof')
   mats: {},
   colors: {},

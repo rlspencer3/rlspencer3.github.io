@@ -340,10 +340,6 @@ export class Builder {
     if (before && entry.p === before) return entry; // identical — nothing changed
     if (opts.animate !== false) {
       this.app.effects.popIn(entry.obj);
-      _box.setFromObject(entry.obj.children[0] || entry.obj);
-      const c = _box.getCenter(new THREE.Vector3());
-      c.y = Math.min(c.y, _box.min.y + 0.3);
-      // popIn scaled to ~0; bbox was computed from the template, still fine for the puff
       this.app.effects.puff(entry.obj.position.clone().setY(entry.obj.position.y + 0.15), 0xf3ead8, 8);
     }
     if (!opts.silent) events.emit('sfx', { name: before ? 'replace' : 'place', flavor: entry.def.sound });
@@ -463,7 +459,10 @@ export class Builder {
   setLevel(n) {
     const lv = clamp(n, 0, MAX_LEVEL);
     if (lv === state.level) return;
-    state.set({ level: lv, hOffset: 0 });
+    // stepping down a floor shows a cutaway (upper floors hidden); stepping up keeps the current view
+    const patch = { level: lv, hOffset: 0 };
+    if (lv < state.level) patch.seeAll = false;
+    state.set(patch);
     events.emit('sfx', { name: 'level' });
   }
 
