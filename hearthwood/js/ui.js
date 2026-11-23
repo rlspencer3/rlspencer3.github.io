@@ -291,7 +291,10 @@ export function init(app) {
     state.set({ seeAll: !state.seeAll });
     toast(state.seeAll ? '👁️ Showing every floor' : '✂️ Cutaway: floors above are hidden', 'info', 2000);
   }, { title: 'Show all floors / cutaway (V)' });
-  const rail = h('div', { class: 'hw-rail hw-hide-photo' }, railTools, h('div', { class: 'hw-rail-group' }, btnDraw, btnSee));
+  // The rail box spans from under the top bar down to the tray; the groups sit at its bottom. When that room
+  // gets short (small phones, the taller paint tray) css/ui.css shortens the tools, then (portrait) moves
+  // Look / All beside them, so the rail never climbs over Undo / Redo.
+  const rail = h('div', { class: 'hw-rail hw-hide-photo' }, h('div', { class: 'hw-rail-in' }, railTools, h('div', { class: 'hw-rail-group' }, btnDraw, btnSee)));
   root.append(rail);
 
   function renderRail() {
@@ -354,7 +357,7 @@ export function init(app) {
     const hudEl = root.querySelector('.hw-hud.is-open');
     if (hudEl) tb = Math.max(tb, hudEl.getBoundingClientRect().bottom);
     const tr = tray.getBoundingClientRect().top;
-    const rl = rail.getBoundingClientRect().left;
+    const rl = railTools.getBoundingClientRect().left;   // the tools column runs down the whole right edge
     const right = rl > window.innerWidth * 0.6 ? Math.round(window.innerWidth - rl) : 0;
     rig.setInsets(Math.max(0, Math.round(tb)), Math.max(0, Math.round(window.innerHeight - tr)), 0, right);
   }
@@ -529,6 +532,47 @@ export function init(app) {
     scroller.scrollTo({ left: Math.max(0, Math.min(max, left)), behavior: smooth ? 'smooth' : 'auto' });
   }
 
+  // Picking a material chip re-renders its strip: the chip gains its name and the one picked before loses its own,
+  // so everything after that one shifts. The tapped chip is put back where the finger left it, then the strip
+  // moves only as far as it takes to show it whole (with its group's label, if that was already peeking in).
+  let chipAnchor = null;   // { strip: class of the strip, key: the chip's data-key, x: its offset from the strip's left }
+  function anchorChip(el) {
+    const strip = el?.closest('.hw-scroll');
+    if (!strip || !el.dataset.key) { chipAnchor = null; return; }
+    chipAnchor = { strip: strip.classList[0], key: el.dataset.key, x: el.getBoundingClientRect().left - strip.getBoundingClientRect().left, t: performance.now() };
+  }
+  /** Put the anchored chip of this (freshly rendered) strip back in place. False when there is none to place. */
+  function restoreAnchor(strip) {
+    const a = chipAnchor;
+    if (a && performance.now() - a.t > 600) chipAnchor = null;   // a tap that changed nothing: forget it
+    if (!chipAnchor || !strip.isConnected || !strip.classList.contains(a.strip)) return false;
+    chipAnchor = null;
+    const el = [...strip.querySelectorAll('[data-key]')].find((c) => c.dataset.key === a.key);
+    if (!el || !strip.clientWidth) return false;
+    strip.scrollLeft += el.getBoundingClientRect().left - strip.getBoundingClientRect().left - a.x;
+    let lead = el.previousElementSibling;      // the group label this chip sits under (paint strip)
+    while (lead && !lead.classList.contains('hw-group-lb')) lead = lead.previousElementSibling;
+    reveal(strip, el, lead);
+    return true;
+  }
+  /** Scroll a strip the least it takes to show `el` whole, and `lead` too when it is already partly in view. */
+  function reveal(strip, el, lead = null) {
+    const sr = strip.getBoundingClientRect(), er = el.getBoundingClientRect();
+    const padL = 4, padR = 16;   // the strip fades out over its last 18 px
+    let lo = er.left;
+    const hi = er.right;
+    if (lead) {
+      const lr = lead.getBoundingClientRect();
+      if (lr.right > sr.left + 2 && hi - lr.left <= sr.width - padL - padR) lo = Math.min(lo, lr.left);
+    }
+    let d = 0;
+    if (lo < sr.left + padL) d = lo - sr.left - padL;
+    else if (hi > sr.right - padR) d = Math.min(hi - sr.right + padR, lo - sr.left - padL);
+    if (Math.abs(d) < 1) return;
+    const max = strip.scrollWidth - strip.clientWidth;
+    strip.scrollTo({ left: Math.max(0, Math.min(max, strip.scrollLeft + d)), behavior: 'smooth' });
+  }
+
   function refreshThumbs() {
     for (const c of cardEls.values()) loadThumb(c);
     if (curBadgeImg) loadCurBadge();
@@ -604,12 +648,13 @@ export function init(app) {
         const chip = btn('hw-chip' + (sel ? ' is-sel' : ''), matName(id), [
           h('span', { class: 'hw-sw', style: { background: swatchBg(id, col) } }),
           sel ? h('span', { class: 'hw-chip-name' }, matName(id)) : null,
-        ], () => state.set({ mats: { ...state.mats, [def.matGroup]: id } }), { attrs: { role: 'radio', 'aria-checked': String(sel) } });
+        ], (e) => { anchorChip(e.currentTarget); state.set({ mats: { ...state.mats, [def.matGroup]: id } }); }, { attrs: { role: 'radio', 'aria-checked': String(sel), 'data-key': id } });
         row.append(chip);
       }
       wheelScroll(row);
       ctx.append(row);
       requestAnimationFrame(() => {
+        if (!row.isConnected || restoreAnchor(row)) return;
         row.scrollLeft = keepScroll;
         ensureVisible(row, row.querySelector('.is-sel'), false);
       });
@@ -706,7 +751,8 @@ export function init(app) {
 
     const matsRow = h('div', { class: 'hw-pm hw-scroll' });
     const groupEls = new Map(), jumpBtns = new Map();
-    matsRow.append(btn('hw-chip hw-keep' + (state.paintMat ? '' : ' is-sel'), 'Keep material', [ico('none'), h('span', { class: 'hw-chip-name' }, 'Keep')], () => state.set({ paintMat: null })));
+    matsRow.append(btn('hw-chip hw-keep' + (state.paintMat ? '' : ' is-sel'), 'Keep material', [ico('none'), h('span', { class: 'hw-chip-name' }, 'Keep')],
+      (e) => { anchorChip(e.currentTarget); state.set({ paintMat: null }); }, { attrs: { 'data-key': '-keep' } }));
     for (const g of PAINT_GROUPS) {
       const list = matList(g.id);
       if (!list.length) continue;
@@ -719,7 +765,7 @@ export function init(app) {
         matsRow.append(btn('hw-chip' + (sel ? ' is-sel' : ''), mm.name, [
           h('span', { class: 'hw-sw', style: { background: swatchBg(mm.id, col) } }),
           sel ? h('span', { class: 'hw-chip-name' }, mm.name) : null,
-        ], () => state.set({ paintMat: sel ? null : mm.id, paintTarget: 'main' })));
+        ], (e) => { anchorChip(e.currentTarget); state.set({ paintMat: sel ? null : mm.id, paintTarget: 'main' }); }, { attrs: { 'data-key': mm.id } }));
       }
     }
     wheelScroll(matsRow);
@@ -790,7 +836,12 @@ export function init(app) {
       pmJump = null;
       if (want === 'sel') ensureVisible(matsRow, matsRow.querySelector('.hw-chip.is-sel'), false, true);
       else if (want) scrollToGroup(want, false);
-      else matsRow.scrollLeft = keepA;
+      else if (restoreAnchor(matsRow)) {
+        // a chip just picked stays under the finger, and its group's button lights up
+        let lb = matsRow.querySelector('.hw-chip.is-sel:not(.hw-keep)');
+        while (lb && !lb.classList.contains('hw-group-lb')) lb = lb.previousElementSibling;
+        if (lb) { markJump(lb.dataset.group); spyHold = performance.now() + 800; }
+      } else matsRow.scrollLeft = keepA;
       spy();
     });
   }
@@ -1469,9 +1520,38 @@ export function init(app) {
   const flash = h('div', { class: 'hw-flash' });
   const shutter = h('button', { type: 'button', class: 'hw-shutter', 'aria-label': 'Take photo', title: 'Take photo' }, h('i'));
   const photoExit = btn('hw-rbtn hw-photo-exit', 'Leave photo mode', ico('close'), () => state.set({ photoMode: false }), { title: 'Leave photo mode (Esc)' });
-  const photoBar = h('div', { class: 'hw-photo' }, photoExit, shutter);
+  // photo mode shows the whole house, roof and all; this peeks inside (the cutaway) for a photo of the rooms
+  const photoSeeIc = h('span', { class: 'hw-photo-see-ic' }), photoSeeTx = h('span');
+  const photoSee = btn('hw-pill hw-photo-see', 'Peek inside', [photoSeeIc, photoSeeTx], () => setSeeAll(!state.seeAll), { attrs: { 'aria-pressed': 'false' } });
+  const photoBar = h('div', { class: 'hw-photo' }, photoExit, photoSee, shutter);
   root.append(flash, photoBar);
   shutter.addEventListener('click', () => capturePhoto());
+
+  /** Every floor / the cutaway, without moving the camera (the floor view would re-aim it at the floor's height). */
+  function setSeeAll(v) {
+    const t = app.rig?.goal?.target;
+    const y = t?.y;
+    state.set({ seeAll: v });
+    if (t && Number.isFinite(y)) t.y = y;
+  }
+  let photoSeeQueued = false;
+  function renderPhotoSee() {
+    if (!state.photoMode || photoSeeQueued) return;
+    photoSeeQueued = true;
+    requestAnimationFrame(() => {
+      photoSeeQueued = false;
+      const cut = !state.seeAll;
+      // only offered when the cutaway hides something (floors above, a roof)
+      let above = cut;
+      if (!above) for (const e of world.entries.values()) if (e.level > state.level) { above = true; break; }
+      photoSee.classList.toggle('is-off', !above);
+      photoSeeIc.textContent = cut ? '🏠' : '✂️';
+      photoSeeTx.textContent = cut ? 'Whole house' : 'Peek inside';
+      photoSee.setAttribute('aria-label', cut ? 'Show the whole house' : 'Peek inside');
+      photoSee.setAttribute('aria-pressed', String(cut));
+      photoSee.title = cut ? 'Show the whole house (V)' : 'Peek inside (V)';
+    });
+  }
 
   function startPhoto() {
     closeSheet(false);
@@ -1564,6 +1644,7 @@ export function init(app) {
       queueMicrotask(() => state.set({ paintColor: PALETTE[4] || '#b4473a' }));
     }
     if (has('photoMode')) setPhotoMode(state.photoMode);
+    else if (has('seeAll', 'level')) renderPhotoSee();
     if (has('blueprint')) {
       if (!state.blueprint) { if (!bp || bp.done < bp.total) { bp = null; hud.classList.remove('is-open'); } }
       else if (!bp || bp.id !== state.blueprint) { bp = { id: state.blueprint, done: 0, total: 0 }; renderHud(); }
@@ -1576,6 +1657,7 @@ export function init(app) {
     renderCount();
     if (d?.kind === 'undo') afterUndo();
     if (page === 'main' && d?.kind !== 'add' && d?.kind !== 'remove') refreshPage();
+    renderPhotoSee();   // (photo mode only; once a frame)
   });
   events.on('toast', (d) => {
     if (!d) return;
@@ -1591,6 +1673,9 @@ export function init(app) {
     if (d.total && d.done >= d.total && was >= 0 && was < d.total && !state.seeAll) state.set({ seeAll: true });
   });
 
+  // The keepsake photo shows the whole house (every floor, roof on) even when you were peeking inside;
+  // leaving photo mode brings back the floor and cutaway you had.
+  let photoPrev = null;   // { level, seeAll } from before photo mode
   function setPhotoMode(on) {
     root.classList.toggle('photo', !!on);
     closePop();
@@ -1599,7 +1684,15 @@ export function init(app) {
     if (on) {
       closeSheet(false);
       hideWelcome(false);
+      if (!photoPrev) photoPrev = { level: state.level, seeAll: state.seeAll };
+      if (!state.seeAll) setSeeAll(true);
+      renderPhotoSee();
       toast('📸 Frame your shot, then tap the shutter', 'info', 2600);
+    } else if (photoPrev) {
+      const prev = photoPrev;
+      photoPrev = null;
+      if (prev.level !== state.level) state.set({ level: prev.level, seeAll: prev.seeAll });
+      else if (prev.seeAll !== state.seeAll) setSeeAll(prev.seeAll);
     }
   }
 

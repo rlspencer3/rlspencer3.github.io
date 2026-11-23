@@ -130,13 +130,22 @@
 
 /* ---------------------------------------------------------------- tool rail */
 
+/* The rail's box runs from just under the top bar down to the tray and its groups sit at the bottom. It is a size
+   container: when the room gets short (small phones, the taller paint tray) the queries at the end of this file
+   shorten the tools, then put Look / All beside them, so the rail never climbs over Undo / Redo. */
+/* (z 21: above the tray, so where Look / All sits beside the tray's handle the buttons get the taps) */
 .hw-rail {
-  position: absolute; z-index: 20;
+  position: absolute; z-index: 21;
   right: calc(var(--safe-right) + 10px);
+  top: calc(var(--safe-top) + 60px);
   bottom: calc(var(--tray-h) + 14px);
-  display: flex; flex-direction: column; gap: 8px; pointer-events: none;
+  width: calc(2 * var(--rail-w) + 8px);
+  display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-end;
+  pointer-events: none;
+  container: hw-rail / size;
   transition: bottom 0.3s var(--ease), opacity 0.3s, transform 0.3s var(--ease);
 }
+.hw-rail-in { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
 .hw-rail-group {
   display: flex; flex-direction: column; gap: 3px; padding: 4px; border-radius: 22px;
   background: rgba(253, 249, 241, 0.94); box-shadow: var(--sh); pointer-events: auto;
@@ -463,7 +472,7 @@
   max-width: calc(100% - var(--rail-w) - 40px);
   display: none; align-items: center; gap: 6px; height: 36px; padding: 0 8px 0 10px; border-radius: 999px;
   background: #eef5e6; color: #3f5d34; pointer-events: auto;
-  box-shadow: 0 0 0 1.5px rgba(111, 143, 90, 0.45) inset, var(--sh-sm); white-space: nowrap; max-width: 100%;
+  box-shadow: 0 0 0 1.5px rgba(111, 143, 90, 0.45) inset, var(--sh-sm); white-space: nowrap;
 }
 .hw-modechip::after { content: ""; position: absolute; left: -4px; right: -4px; top: -5px; bottom: -5px; }
 .hw-modechip.is-on { display: inline-flex; animation: hw-drop 0.3s var(--ease); }
@@ -783,6 +792,14 @@
 .hw-photo { position: absolute; inset: 0; z-index: 80; pointer-events: none; display: none; }
 .hw.photo .hw-photo { display: block; }
 .hw-photo-exit { position: absolute; top: calc(var(--safe-top) + 12px); right: calc(var(--safe-right) + 12px); pointer-events: auto; background: rgba(253, 249, 241, 0.9); }
+/* whole house ⇄ peek inside (the cutaway), across from ✕ */
+.hw-photo-see {
+  position: absolute; top: calc(var(--safe-top) + 12px); left: calc(var(--safe-left) + 12px);
+  min-height: 44px; padding: 0 15px 0 12px; pointer-events: auto; background: rgba(253, 249, 241, 0.9);
+  box-shadow: var(--sh); animation: hw-drop 0.3s var(--ease);
+}
+.hw-photo-see.is-off { display: none; }
+.hw-photo-see-ic { font-size: 17px; line-height: 1; }
 .hw-shutter {
   position: absolute; left: 50%; bottom: calc(var(--safe-bottom) + 22px); width: 72px; height: 72px; margin-left: -36px;
   border-radius: 50%; background: rgba(255, 255, 255, 0.35); box-shadow: 0 0 0 4px #fff inset, 0 6px 18px rgba(0, 0, 0, 0.25);
@@ -840,10 +857,24 @@
   .hw-count { display: none; }
   .hw-lv-stack { display: none; }
 }
-@media (max-height: 600px) and (orientation: portrait) {
-  .hw-tool { height: 44px; }
-  .hw-tool-lb { display: none; }
-  .hw-rail-group { gap: 2px; }
+/* the narrowest phones (a 280 px fold cover screen): a slimmer floor pill fits between Menu and Undo.
+   Its arrows give up a few px of width; their tap areas reach over the label. */
+@media (max-width: 300px) {
+  .hw-top-r { gap: 4px; }
+  .hw-top { gap: 4px; }
+  .hw-level { padding: 0; }
+  .hw-lv-btn { width: 34px; position: relative; }
+  .hw-lv-btn::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; right: -6px; }
+  .hw-lv-btn:last-child::after { left: -6px; right: 0; }
+  .hw-lv-name { font-size: 13px; }
+}
+/* very short portrait screens (320 x 480): the paint tray drops its hint row (Done moves up beside Main / Accent),
+   so the tool rail still fits between the top bar and the tray */
+@media (max-height: 520px) and (orientation: portrait) {
+  .hw-tray.mode-paint:not(.is-collapsed) .hw-ctx { display: none; }
+  .hw-tray.mode-paint .hw-paint { padding-top: 2px; }
+  .hw-phead-done { display: inline-flex; min-height: 40px; padding: 0 12px; margin-left: auto; }
+  .hw-brush { display: none; }
 }
 @media (max-width: 560px) and (orientation: portrait) {
   /* keep clear of the tool rail on the right */
@@ -858,7 +889,8 @@
   .hw-level { height: 44px; }
   .hw-lv-btn { height: 44px; }
   .hw-rbtn { width: 44px; height: 44px; }
-  .hw-rail { bottom: calc(var(--safe-bottom) + 8px); right: calc(var(--safe-right) + 8px); gap: 6px; }
+  .hw-rail { top: calc(var(--safe-top) + 56px); bottom: calc(var(--safe-bottom) + 8px); right: calc(var(--safe-right) + 8px); }
+  .hw-rail-in { gap: 6px; }
   .hw-rail-group { padding: 3px; gap: 2px; border-radius: 20px; }
   .hw-tool { width: 46px; height: 44px; border-radius: 15px; }
   .hw-tool-lb { display: none; }
@@ -933,7 +965,7 @@
 @media (min-width: 760px) and (min-height: 560px) {
   .hw { font-size: 15px; }
   .hw-top { padding: calc(var(--safe-top) + 14px) calc(var(--safe-right) + 16px) 0 calc(var(--safe-left) + 16px); }
-  .hw-rail { right: calc(var(--safe-right) + 16px); bottom: calc(var(--safe-bottom) + 16px); }
+  .hw-rail { right: calc(var(--safe-right) + 16px); top: calc(var(--safe-top) + 66px); bottom: calc(var(--safe-bottom) + 16px); }
   .hw-tool { width: 56px; height: 56px; }
   .hw-tool-ic { font-size: 22px; }
   .hw-tray {
@@ -967,4 +999,31 @@
 @media (min-width: 1100px) and (min-height: 560px) {
   .hw-tab-lb { display: none; }
   .hw-tab-full { display: block; }
+}
+
+/* ---------------------------------------------------------------- tool rail on a short screen
+   The rail's box (a size container) is the room between the top bar and the tray. Natural rail: 324 px tall
+   (landscape phones 302). Short on room: the tools get 4 px shorter; still short (portrait): Look / All moves in
+   beside the tools, bottom-aligned above the tray; only past that do the tools drop their labels. */
+@container hw-rail (max-height: 323px) {
+  .hw-tool { height: 44px; }
+  .hw-rail-group { gap: 2px; }
+}
+@media not all and (orientation: landscape) and (max-height: 540px) {
+  @container hw-rail (max-height: 295px) {
+    .hw-rail-in { flex-direction: row-reverse; align-items: flex-end; gap: 6px; }
+  }
+  @container hw-rail (max-height: 189px) {
+    .hw-tool { height: 38px; }
+    .hw-tool-lb { display: none; }
+    .hw-rail-group { gap: 1px; }
+  }
+}
+/* landscape phones: the tray sits beside the rail, so the rail stays one column */
+@media (orientation: landscape) and (max-height: 540px) {
+  @container hw-rail (max-height: 289px) {
+    .hw-tool, .hw-draw, .hw-see { height: 38px; }
+    .hw-tool-lb, .hw-draw .hw-tool-lb, .hw-see .hw-tool-lb { display: none; }
+    .hw-rail-group { gap: 1px; }
+  }
 }
