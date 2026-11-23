@@ -303,7 +303,11 @@ async function game(q, opts) {
     let doneCalled = false;
     hw.effects.popOut(obj, () => { doneCalled = true; });
     const inScene = obj.parent === hw.scene;
+    // the 0.18 s tween needs a few frames (dt is capped per frame): wait for it, not for a fixed time, so a
+    // slow / busy machine doesn't fail the check (400 ms stays the minimum)
     await T.sleep(400);
+    for (let i = 0; i < 100 && hw.effects.isAnimating(obj); i++) await T.sleep(50);
+    await T.sleep(50);
     const removedAfter = obj.parent === null;
     // fast placement of neighbouring walls: the first wall is rebuilt while its pop-in still runs
     hw.world.beginBatch();

@@ -1696,7 +1696,8 @@ class Env {
     for (let i = 0; i < this.emitters.length && k < MAX_EMIT; i++) {
       const e = this.emitters[i], o = e.obj;
       if (!o || !o.visible || !o.parent) continue;
-      const off = e.def.emitterOffset || DEFAULT_EMIT;
+      // a piece may move its emitter with its shape (a chimney grown through a tall roof)
+      const off = o.children[0]?.userData.emitterOffset || e.def.emitterOffset || DEFAULT_EMIT;
       o.updateWorldMatrix(true, false);
       _v.set(off[0], off[1], off[2]);
       o.localToWorld(_v);

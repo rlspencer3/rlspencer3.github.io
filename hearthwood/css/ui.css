@@ -513,7 +513,7 @@
 }
 .hw-hud.is-done .hw-bar, .hw-hud.is-done .hw-hud-num { display: none; }
 .hw-hud.is-done .hw-hud-emoji { width: 34px; height: 34px; font-size: 21px; background: #dcebcd; }
-.hw-hud.is-done .hw-hud-tx small { color: #4f6f42; font-weight: 700; }
+.hw-hud.is-done .hw-hud-tx small { color: #4f6f42; font-weight: 700; white-space: normal; line-height: 1.2; }   /* the payoff line may wrap beside the rail */
 
 /* ---------------------------------------------------------------- menu sheet */
 

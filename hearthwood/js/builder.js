@@ -21,7 +21,9 @@ const TOUCH_TIP_MS = 6000;        // undo this soon after a touch placement → 
 const LINE_SLACK = 0.8;           // a wall stroke stays on its grid line until the finger is this many cells off it…
 const LINE_ON = 0.3;              // …(closer than this counts as "on the line")
 const SEG_SLACK = 0.25;           // …and takes the next segment once the finger is this far into it
-const TURN_RATIO = 0.5;           // leaving the line steeper than ~63° is a turn (an L), shallower a hop to the next line
+const TURN_RATIO = 0.5;           // leaving the line steeper than ~63° is a turn (an L), shallower a hop to the next line…
+const HEAD_LEN = 0.45;            // …or heading steeper than 45° over the finger's last ~half cell (a rounded corner)
+const HOP_UNDO = 1;               // a turn within this many cells of a hop turns from the line before the hop
 const ROOF_FAR = '🏠 Tap the top of a wall to rest the roof on it';
 // build grid: soft white by day, a dim moonlit blue at night (so it doesn't glow over the scene)
 const GRID_OPACITY = 0.28;
@@ -30,6 +32,8 @@ const GRID_DAY = new THREE.Color(0xffffff);
 const GRID_NIGHT = new THREE.Color(0x8d9cc4);
 /** Wall-like pieces that can hold up a roof (garden fences, hedges and railings can't). */
 const holdsRoof = (def) => !!def && (def.layer === 'B' || def.cat === 'walls' || def.cat === 'openings');
+/** Which edge pieces line up into one run with a gap to fill: walls & openings together, else each kind alone. */
+const gapFamily = (def) => (def.cat === 'walls' || def.cat === 'openings' ? 'wall' : def.id);
 
 export class Builder {
   constructor(app) {
@@ -372,33 +376,204 @@ export class Builder {
 
   /**
    * Wall strokes keep to their grid line: the finger may wander up to LINE_SLACK cells off it (a drifting thumb)
-   * before the stroke follows. Leaving it across the line (a turn) carries on along the cross line from the
-   * nearest corner (an L); leaving while still travelling along it moves the stroke to the parallel line.
+   * before the stroke follows. Leaving it across the line (a turn) carries on along the cross line through the
+   * grid corner nearest the finger (an L): segments this stroke laid past that corner are taken back (an
+   * overshooting thumb leaves no stub), a row that stopped short of it is finished, and the new side is filled
+   * in from the corner to the finger (see resolve / drawMove). Leaving while still travelling along the line
+   * moves the stroke to the parallel line.
+   * Steep or shallow is judged twice: overall since the finger was last on the line, and by where it is heading
+   * now (its last ~half cell), so a thumb rounding a wide corner — or wobbling at it — still turns. A hop that
+   * turns within a cell is taken as that turn from the line before the hop (the hop's segment is taken back).
    */
   _strokeLine(dr, sx, sy, L, at, keep = false) {
     const hit = at || this.rayPlane(sx, sy, levelY(L));   // the finger's spot (see resolve), else the floor
     if (!hit) return;
     const x = dr.axis === 'x';
     const along = (x ? hit.x : hit.z) / CELL, perp = (x ? hit.z : hit.x) / CELL;
+    // the finger's recent track (cells), for the way it is heading
+    const tr = dr.track, hx = hit.x / CELL, hz = hit.z / CELL, tl = tr[tr.length - 1];
+    if (!tl || Math.abs(hx - tl[0]) + Math.abs(hz - tl[1]) > 0.02) { tr.push([hx, hz]); if (tr.length > 24) tr.shift(); }
+    if (dr.hopFrom && Math.abs(along - dr.hopFrom.along) >= HOP_UNDO) dr.hopFrom = null;   // a real hop: keep it
     const off = Math.abs(perp - dr.line);
-    if (off <= LINE_ON) {
-      if (Math.abs(along - dr.on) > 0.05) dr.go = Math.sign(along - dr.on);
-      dr.on = along;
-      return;
-    }
+    if (off <= LINE_ON) { dr.on = along; return; }
     if (keep || off <= LINE_SLACK) return;
-    if (Math.abs(along - dr.on) < TURN_RATIO * off) {
-      // turned a corner (left the line steeply): the new line runs across the old one, through the corner at
-      // the end of the row laid so far (no stub past it), else the corner nearest where the finger left
+    let steep = Math.abs(along - dr.on) < TURN_RATIO * off;
+    if (!steep) {
+      for (let k = tr.length - 2; k >= 0; k--) {
+        const dA = along - (x ? tr[k][0] : tr[k][1]), dP = perp - (x ? tr[k][1] : tr[k][0]);
+        if (Math.hypot(dA, dP) < HEAD_LEN && k > 0) continue;
+        steep = Math.abs(dA) < Math.abs(dP);
+        break;
+      }
+    }
+    if (steep) {
+      // turned a corner (left the line steeply). The finger is on the new line now, so the corner is the grid
+      // point nearest it along the old line. The row's direction of travel (dr.go) comes from its segments, so
+      // a thumb wobbling back a little as it rounds the corner can't flip it.
+      const hop = dr.hopFrom;
+      dr.hopFrom = null;
+      if (hop && Math.abs(along - hop.along) < HOP_UNDO) {
+        // it only hopped on its way round the corner: turn from the line it was on, taking the hop's segments back
+        dr.drop.push(...hop.keys);
+        dr.line = hop.line; dr.seg = hop.seg; dr.go = hop.go; dr.last = hop.last;
+      }
+      const c = Math.round(along), go = dr.go, oldLine = dr.line;
+      // the segment the row laid last, past that corner: an overshooting thumb's stub, taken back
+      const last = dr.last;
+      if (last && ((go > 0 && last.i >= c) || (go < 0 && last.i < c))) dr.drop.push(last.key);
+      // a row that stopped short of the corner (a fast finger skipped a sample) is finished up to it
+      if (dr.seg !== undefined && go) {
+        for (let i = dr.seg + go, n = 0; (go > 0 ? i < c : i >= c) && n < 3; i += go, n++) {
+          dr.fill.push(x ? { a: 'x', x: i, z: oldLine } : { a: 'z', x: oldLine, z: i });
+        }
+      }
       dr.axis = x ? 'z' : 'x';
-      dr.line = dr.seg !== undefined && dr.go ? dr.seg + (dr.go > 0 ? 1 : 0) : Math.round(dr.on);
+      dr.line = c;
       dr.on = perp;
+      dr.corner = oldLine;       // where the new side starts (along the new line): filled in up to the finger
+      dr.go = 0;
+      dr.last = null;
     } else {
+      // a hop to the parallel line: still travelling the same way (remembered, in case it was a corner after all)
+      dr.hopFrom = { line: dr.line, along, seg: dr.seg, go: dr.go, last: dr.last, keys: [] };
       dr.line = Math.round(perp);
       dr.on = along;
+      dr.corner = undefined;
+      dr.last = null;
     }
     dr.seg = undefined;
-    dr.go = 0;
+  }
+
+  /** A stroke's row moved on to segment i (dr.go follows the segments, not every wobble of the finger). */
+  _strokeSeg(dr, i) {
+    if (dr.seg !== undefined && i !== dr.seg) dr.go = Math.sign(i - dr.seg);
+    dr.seg = i;
+  }
+
+  /**
+   * A full record for an edge piece in a slot the stroke fills in by itself (a corner it rounded, the start of
+   * a new side): like a tap there, but only into an empty slot — or over the same piece in another look (a
+   * stroke restyling a row repaints the corner it crossed before the turn showed). Null when it can't go there.
+   */
+  _strokeRec(def, L, slot) {
+    if (def.slot !== 'edge' || this._guidesLeft(def)) return null;
+    const p = { t: def.id, y: L, a: slot.a, x: slot.x, z: slot.z };
+    if (def.rot === 'four') p.r = state.rot & 3;
+    else if (def.rot === 'flip') p.r = state.rot >= 2 ? 2 : 0;
+    if (def.autoGable) Object.assign(p, this.autoGable(def, p));
+    const m = this.materialFor(def);
+    if (m) p.m = m;
+    const c = this.colorFor(def, m);
+    if (c) p.c = c;
+    if (def.accent) p.k = state.accent;
+    if (def.autoGable && this._tallGable(def, p)) return null;
+    const q = this.world.normalize(p);
+    if (!q || !this.world.validate(q).ok) return null;
+    const cur = this.world.get(this.world.keyOf(q));
+    if (cur && (cur.t !== q.t || def.autoGable || (cur.m === q.m && (cur.c || '') === (q.c || '')
+      && (cur.k || '') === (q.k || '') && (cur.r || 0) === (q.r || 0)))) return null;
+    return q;
+  }
+
+  /**
+   * A gable over the top floor takes the Floor-5 wall's slot as one tall piece (that wall + the triangle). It
+   * keeps that wall's look (material & paint); a window, door or anything else there would be covered up, so
+   * that's refused with a reason. Mutates p (m / c); returns '' or the reason.
+   */
+  _tallGable(def, p) {
+    if (p.y !== MAX_LEVEL || (p.h || 0) < 2) return '';
+    const under = this.world.get(K.W(p.a, p.x, MAX_LEVEL, p.z));
+    const ud = under && getDef(under.t);
+    if (!ud || ud.autoGable) return '';       // an open edge, or a tall gable being swapped for another one
+    if (ud.id === 'wall') {
+      if (under.m && def.mats?.includes(under.m)) p.m = under.m;
+      if (under.c) p.c = under.c; else delete p.c;
+      return '';
+    }
+    const name = (ud.name || 'piece').toLowerCase();
+    if (ud.cat === 'openings') return `${ud.icon || '🪟'} That wall has ${/^[aeiou]/.test(name) ? 'an' : 'a'} ${name} — the gable would cover it`;
+    return `${ud.icon || '🧱'} The gable would cover the ${name} there`;
+  }
+
+  /**
+   * Gaps in a wall line on floor L: empty edges whose two ends both meet a piece of the same family (walls &
+   * openings, or one kind of fence / hedge / railing) — and that carry on a line of that family at one end, or
+   * whose ends don't sit in the middle of a straight run across them (a cross edge of a one-cell-deep corridor
+   * or annex touches both long walls, but it is no gap: a tap there means the cell the finger is on).
+   * Cached per world version.
+   */
+  _gaps(fam, L) {
+    const W = this.world;
+    const sig = `${W.version}|${L}|${fam}`;
+    if (this._gp && this._gp.sig === sig) return this._gp.list;
+    const verts = new Set(), pieces = [];
+    for (const e of W.entries.values()) {
+      if (e.def.layer !== 'W' || e.p.y !== L || gapFamily(e.def) !== fam) continue;
+      const p = e.p;
+      pieces.push(p);
+      verts.add(p.x + '|' + p.z);
+      verts.add(p.a === 'x' ? (p.x + 1) + '|' + p.z : p.x + '|' + (p.z + 1));
+    }
+    const has = (a, x, z) => { const q = W.get(K.W(a, x, L, z)); return !!q && gapFamily(getDef(q.t)) === fam; };
+    // a run across axis a passing straight through vertex (vx, vz)
+    const through = (a, vx, vz) => (a === 'x' ? has('z', vx, vz - 1) && has('z', vx, vz) : has('x', vx - 1, vz) && has('x', vx, vz));
+    const collinear = (a, x, z) => (a === 'x' ? has('x', x - 1, z) || has('x', x + 1, z) : has('z', x, z - 1) || has('z', x, z + 1));
+    const list = [], seen = new Set();
+    const consider = (a, x, z) => {
+      const k = a + '|' + x + '|' + z;
+      if (seen.has(k)) return;
+      seen.add(k);
+      if (W.get(K.W(a, x, L, z))) return;
+      const [ex, ez] = a === 'x' ? [x + 1, z] : [x, z + 1];
+      if (!verts.has(x + '|' + z) || !verts.has(ex + '|' + ez)) return;
+      if (!collinear(a, x, z) && (through(a, x, z) || through(a, ex, ez))) return;
+      list.push({ a, x, z });
+    };
+    for (const p of pieces) {
+      for (const [vx, vz] of [[p.x, p.z], p.a === 'x' ? [p.x + 1, p.z] : [p.x, p.z + 1]]) {
+        consider('x', vx, vz); consider('x', vx - 1, vz); consider('z', vx, vz); consider('z', vx, vz - 1);
+      }
+    }
+    this._gp = { sig, list };
+    return list;
+  }
+
+  /**
+   * A tap into a gap in a wall line (seen through it, the floor or a wall behind would otherwise decide):
+   * the gap's edge, when the ray crosses its opening before anything else. Window & door tools aimed at a
+   * wall seen through the gap keep swapping that wall.
+   */
+  _gapSlot(def, L, pick) {
+    const fam = gapFamily(def);
+    const list = this._gaps(fam, L);
+    if (!list.length) return null;
+    const o = _ray.ray.origin, dir = _ray.ray.direction;
+    const y0 = (L === 0 ? 0 : levelY(L)) - 0.05, y1 = levelY(L) + (fam === 'wall' ? LEVEL_H : 1.2);
+    let best = null, bestT = Infinity;
+    for (const g of list) {
+      let t, along;
+      if (g.a === 'z') {
+        if (Math.abs(dir.x) < 1e-6) continue;
+        t = (g.x * CELL - o.x) / dir.x;
+        along = o.z + dir.z * t - g.z * CELL;
+      } else {
+        if (Math.abs(dir.z) < 1e-6) continue;
+        t = (g.z * CELL - o.z) / dir.z;
+        along = o.x + dir.x * t - g.x * CELL;
+      }
+      if (t <= 0 || t >= bestT) continue;
+      const y = o.y + dir.y * t;
+      if (along < 0.1 || along > CELL - 0.1 || y < y0 || y > y1) continue;
+      best = g; bestT = t;
+    }
+    if (!best) return null;
+    if (pick) {
+      if (pick.point.distanceTo(o) < bestT - 0.1) return null;          // something stands in front of the gap
+      const e = pick.entry;
+      if (def.cat === 'openings' && e.def.layer === 'W' && gapFamily(e.def) === 'wall' && e.def.id !== def.id
+        && (e.p.y === L || this._swapAcross(def, e, pick))) return null;
+    }
+    return best;
   }
 
   /** Open roof ends: edges beside a visible slope panel where the roof doesn't carry on. Cached per world/view. */
@@ -511,8 +686,13 @@ export class Builder {
       const c = this._gableSlot(pick);
       if (c) { p.a = c.a; p.x = c.x; p.z = c.z; p.y = c.y; fixed = true; }
     }
-    // a wall stroke keeps to its grid line (and turns corners) — decided before the pieces under the finger
     const dr = this.drawing;
+    // a tap into a gap in a wall line fills that gap (not the floor or the far wall seen through it)
+    if (!fixed && !dr && def.layer === 'W' && !def.autoGable) {
+      const gap = this._gapSlot(def, L, pick);
+      if (gap) { p.a = gap.a; p.x = gap.x; p.z = gap.z; fixed = true; }
+    }
+    // a wall stroke keeps to its grid line (and turns corners) — decided before the pieces under the finger
     if (!fixed && dr && dr.axis && dr.line !== undefined && def.slot === 'edge') {
       // where the finger is: on a wall the stroke is restyling, the spot on that wall (seen low, the floor behind
       // a wall can be cells away); else the floor — and over a piece of its own kind on its line (one it just
@@ -577,7 +757,7 @@ export class Builder {
         let i = Math.floor(along);
         if (dr.seg === i - 1 && along - i < SEG_SLACK) i = dr.seg;
         else if (dr.seg === i + 1 && i + 1 - along < SEG_SLACK) i = dr.seg;
-        dr.seg = i;
+        this._strokeSeg(dr, i);
         if (dr.axis === 'x') Object.assign(p, { a: 'x', x: i, z: dr.line });
         else Object.assign(p, { a: 'z', x: dr.line, z: i });
       } else {
@@ -622,12 +802,15 @@ export class Builder {
     const c = this.colorFor(def, m);
     if (c) p.c = c;
     if (def.accent) p.k = state.accent;
+    // a gable over the top floor wears the look of the wall it grows from (or can't cover an opening)
+    const tall = def.autoGable && fixed !== 'guide' ? this._tallGable(def, p) : '';
 
     const q = this.world.normalize(p);
     if (!q) return null;
     const v = this.world.validate(q);
     const key = this.world.keyOf(q);
     const out = { p: q, def, key, valid: v.ok, reason: v.reason, existing: this.world.get(key) };
+    if (tall && out.valid) { out.valid = false; out.reason = tall; }
     // pointing at a wall too far below its top: say so (and show where the roof would land) rather than place it
     if (roofFar && out.valid) { out.valid = false; out.reason = ROOF_FAR; }
     // following a blueprint: while this piece still has glowing guides, only they take it (no stray pieces from mis-taps)
@@ -948,8 +1131,15 @@ export class Builder {
     this.world.beginBatch();
     let touch = false;
     for (const ptr of this.rig.pointers?.values?.() || []) if (ptr.type !== 'mouse') touch = true;
-    // axis / line / on / seg / go: a wall stroke's grid line (see _strokeLine); roofLevel: a roof stroke's level
-    this.drawing = { seen: new Set(), axis: null, line: undefined, on: 0, seg: undefined, go: 0, count: 0, ops: 0, touch, roofLevel: undefined };
+    // axis / line / on / seg / go / corner: a wall stroke's grid line (see _strokeLine); fresh: what it put into
+    // empty slots (key → record), last: the newest of those on the current row; drop / fill: a stub to take
+    // back and slots to fill in at a corner; track: the finger's recent spots (its heading); hopFrom: the line
+    // before a hop and what was laid since (a hop that turns at once was a corner); roofLevel: a roof stroke's level
+    this.drawing = {
+      seen: new Set(), axis: null, line: undefined, on: 0, seg: undefined, go: 0, corner: undefined,
+      fresh: new Map(), last: null, drop: [], fill: [], count: 0, ops: 0, touch, roofLevel: undefined,
+      track: [], hopFrom: null,
+    };
     // a wall-like stroke waits for the finger's first move: its direction picks the first edge's axis (not
     // whichever edge happens to be nearest where the finger landed — on a corner that's a coin toss)
     if (state.tool === 'build' && getDef(state.pieceId)?.slot === 'edge') { this.drawing.from = { x: sx, y: sy }; return; }
@@ -972,21 +1162,40 @@ export class Builder {
     this.lastScreen = { x: sx, y: sy };
     if (state.tool === 'build') {
       const t = this.resolve(sx, sy);
+      if (d.drop.length) this._strokeDrop(d);
       if (!t) return;
       this._showGhost(t);
       // the row's current segment (also when a piece under the finger decided it)
-      if (t.def.slot === 'edge' && t.p.a === d.axis && (t.p.a === 'x' ? t.p.z : t.p.x) === d.line) d.seg = t.p.a === 'x' ? t.p.x : t.p.z;
+      if (t.def.slot === 'edge' && t.p.a === d.axis && (t.p.a === 'x' ? t.p.z : t.p.x) === d.line) {
+        const i = t.p.a === 'x' ? t.p.x : t.p.z;
+        if (d.corner !== undefined) {
+          // just turned a corner: the new side runs from the corner to here (the turn only shows once the
+          // finger is well off the old line — or past a wall it just laid — so fill in what it crossed)
+          const c = d.corner, s = i >= c ? 1 : -1;
+          d.corner = undefined;
+          for (let j = s > 0 ? c : c - 1, n = 0; j !== i && n < 4; j += s, n++) {
+            d.fill.push(d.axis === 'x' ? { a: 'x', x: j, z: d.line } : { a: 'z', x: d.line, z: j });
+          }
+          d.go = s;
+        }
+        this._strokeSeg(d, i);
+      }
+      if (d.fill.length) {
+        // a corner the stroke rounded: the segments the finger crossed before the turn showed
+        const fill = d.fill;
+        d.fill = [];
+        for (const slot of fill) {
+          const q = this._strokeRec(t.def, state.level, slot);
+          if (q) this._strokePlace(d, { p: q, def: t.def, key: this.world.keyOf(q), valid: true });
+        }
+      }
       if (d.seen.has(t.key) || !t.valid) return;
-      d.seen.add(t.key);
       if (t.def.slot === 'edge' && d.line === undefined) {
         // the first edge sets the stroke's line (see _strokeLine)
         const x = t.p.a === 'x';
         d.axis = t.p.a; d.line = x ? t.p.z : t.p.x; d.on = (x ? t.p.x : t.p.z) + 0.5; d.seg = x ? t.p.x : t.p.z;
       }
-      if (this.place(t.p, { silent: d.count > 0 && d.count % 2 === 1 })) {
-        d.count++; d.ops++;
-        this._afterPlace(t, d.touch, true);
-      }
+      this._strokePlace(d, t);
     } else if (state.tool === 'erase') {
       // a stroke tidies one kind of thing on one floor: wiping across a roof must not tunnel
       // through to the walls and furniture that appear underneath as the panels vanish
@@ -999,6 +1208,42 @@ export class Builder {
     } else if (state.tool === 'paint') {
       const pick = this.pickPiece(sx, sy);
       if (pick && !d.seen.has(pick.entry.key)) { d.seen.add(pick.entry.key); if (this.paintAt(sx, sy)) d.ops++; }
+    }
+  }
+
+  /** Place a stroke's piece (once per slot per stroke). */
+  _strokePlace(d, t) {
+    if (d.seen.has(t.key)) return;
+    d.seen.add(t.key);
+    const before = this.world.get(t.key);
+    const entry = this.place(t.p, { silent: d.count > 0 && d.count % 2 === 1 });
+    if (!entry) return;
+    if (!before) {
+      d.fresh.set(t.key, entry.p);
+      // the last new segment of the current row (a stub to take back if the stroke turns short of it)
+      const q = entry.p;
+      if (q.a && q.a === d.axis && (q.a === 'x' ? q.z : q.x) === d.line) {
+        d.last = { key: t.key, i: q.a === 'x' ? q.x : q.z };
+        if (d.hopFrom) d.hopFrom.keys.push(t.key);      // laid on a line it just hopped to (see _strokeLine)
+      }
+    }
+    d.count++; d.ops++;
+    this._afterPlace(t, d.touch, true);
+  }
+
+  /** Take back stub segments a stroke laid past the corner it turned at (only pieces it put into empty slots). */
+  _strokeDrop(d) {
+    const keys = d.drop;
+    d.drop = [];
+    for (const key of keys) {
+      const q = d.fresh.get(key);
+      d.fresh.delete(key);
+      d.seen.delete(key);
+      const e = this.world.entry(key);
+      if (!q || !e || e.p !== q) continue;
+      const pos = e.obj.position.clone();
+      this.world.remove(key);
+      this.app.effects.puff(pos.setY(pos.y + 0.3), 0xf3ead8, 5, 0.6);
     }
   }
 

@@ -865,23 +865,46 @@ registerPiece({
 
 // ---------------------------------------------------------------- chimney
 // Brick or stone stack with a hearth (glowing embers at night) on its local +Z face, a corbelled crown,
-// a stone cap and two clay pots. Tall enough to poke through a typical roof built above it.
+// a stone cap and two clay pots. Contextual: the stack grows until its cap clears the roof panels over its
+// cell (any row of the roof, not just the eaves), and the smoke follows the pots (userData.emitterOffset).
 
 const CH = { W: 0.9, H: 4.3 };
+const CH_TOP = CH.H - 0.15;     // cap-slab top of the standard stack (m above its floor)
+const CH_CLEAR = 0.5;           // the cap stands at least this far above the roof at the stack's uphill face
+const CH_REACH = (1 + CH.W / 2) / 2;   // roof height field at the stack's uphill face, as a fraction of the rise
+
+/** Cap-slab top (m above the chimney's floor) that clears every roof panel over its cell, in 5 cm steps. */
+function chimneyTop(p, ctx) {
+  let top = CH_TOP;
+  if (!ctx || !ctx.get) return top;
+  for (let hs = 2 * p.y; hs <= 2 * p.y + 14; hs++) {
+    const q = ctx.get(K.R(p.x, hs, p.z));
+    const roof = q && Math.abs(q.y - p.y) <= 2 && ctx.defOf(q)?.roof;   // (the world rebuilds us for those)
+    if (!roof) continue;
+    const kind = roof.kind || 'slope', rise = (roof.rise ?? 1) * STEP;
+    const field = kind === 'flat' ? 0 : kind === 'cap' ? rise : rise * CH_REACH;
+    const t = kind === 'flat' ? FLAT.T : tvOf(q.m);
+    top = Math.max(top, (hs - 2 * p.y) * STEP + field + t + CH_CLEAR);
+  }
+  return Math.ceil(top * 20 - 1e-6) / 20;
+}
 
 registerPiece({
   id: 'chimney', name: 'Chimney', cat: 'roof', slot: 'cell', layer: 'I',
   mats: ['brick', 'stone'], matGroup: 'chimney', icon: '🧱', sound: 'stone',
   emitter: 'smoke', emitterOffset: [0.17, CH.H + 0.16, 0],
+  contextual: true, contextKey: (p, ctx) => String(chimneyTop(p, ctx)),
   cacheExtra: groundFlag, thumb: { y: 1 },
   desc: 'A brick chimney with a crackling hearth. Smoke curls from its pots.',
-  build(p) {
+  build(p, ctx) {
     const g = new THREE.Group();
     const m = mat(p.m);
     const cap = mat('stoneBlock');
     const W = CH.W, h2 = W / 2;
     const y0 = p.y === 0 ? -BASE_Y : 0;
-    const crownY = CH.H - 0.45;
+    const top = chimneyTop(p, ctx);
+    const crownY = top - 0.3;
+    g.userData.emitterOffset = [0.17, top + 0.31, 0];
     const fbH = 1.05;                         // hearth opening height
     const ow = 0.56;                          // hearth opening width
     // base plinth + hearth stone

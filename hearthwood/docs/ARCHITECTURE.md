@@ -138,6 +138,9 @@ cache key gains `|g`); pieces built off the lot (palette thumbnails at x = 500) 
   a roof touching a Floor-4 roof stays at MAX_LEVEL.
 * A gable roof over a W-wide house: slopes of rotation r on the downhill half, rotation (r+2)%4 on the other half,
   stacked by `h`; the two top rows meet at the ridge with the same `hs + rise`.
+* The chimney (layer `I`) is contextual: its stack grows (5 cm steps, never below the standard 4.3 m piece) until the
+  cap clears every roof panel over its cell (hs from 2·y to 2·y + 14) by 0.5 m at the stack's uphill face, so a
+  chimney tapped onto a roof near the ridge still pokes out. Its smoke emitter moves with it (`userData.emitterOffset`).
 
 ### Gables (`autoGable: true` edge pieces)
 
@@ -145,6 +148,8 @@ Placed on an edge under a roof slope that runs **along** the edge. The builder s
 roof slope's base at that edge), `s` (the slope's rise) and `r` so that local +X points uphill. Shape: from local x = −1 to +1,
 bottom at 0, top line from `h*STEP` (at x = −1) to `(h+s)*STEP` (at x = +1) — exactly the underside of the roof panel.
 Over the top floor a gable takes the Floor-5 wall's slot as one tall piece (y = MAX_LEVEL, h ≥ 2: wall and triangle).
+It copies that wall's material and colour (`builder._tallGable`); a Floor-5 window, door or any other non-wall piece
+there makes the gable invalid ('🪟 That wall has a window — the gable would cover it') rather than covering it.
 
 ## Piece definitions (js/catalog.js `registerPiece`)
 
@@ -165,7 +170,8 @@ registerPiece({
   autoGable: false,
   roof: { rise: 1, kind: 'slope' },
   emitter: 'smoke',            // optional: env.js spawns particles (smoke) at the piece
-  emitterOffset: [0, 3.2, 0],  // local offset of the emitter
+  emitterOffset: [0, 3.2, 0],  // local offset of the emitter (a build() may set userData.emitterOffset on its root
+                               // group instead, for a shape-dependent spot: kept by mergeByMaterial, read every frame)
   thumb: { … },                // record overrides used for palette thumbnails
   showcase: { … },             // record overrides used by ?showcase=
   icon: '🪟', desc: 'One-line description', sound: 'wood' | 'stone' | 'soft' | 'glass' | 'metal' | 'leaf',
@@ -346,9 +352,18 @@ wall face) is invalid: red ghost, error sound and '🏠 Tap the top of a wall to
 triangle visible in front of whatever the ray hits wins (looking through one open end never picks the far end).
 * Draw strokes: wall-like (edge) strokes take their first edge's axis from the finger's first move, then keep to that
   grid line while the finger stays within 0.8 cell of it; leaving it steeply (along-travel < 0.5 × off-distance) turns
-  the corner at the end of the row laid so far (an L, no stub), leaving it shallowly hops to the parallel line. Walls on
+  a corner, leaving it shallowly hops to the parallel line. A turn goes through the grid corner nearest the finger
+  (it is on the new line by then): the row's last new segment, if it lies past that corner, is taken back (an
+  overshooting thumb leaves no stub), a row that stopped short is finished up to it, and the new side is filled in
+  from the corner to the finger (the turn registers ~0.8 cell late, or later while the finger is over a wall the
+  stroke just laid). The row's direction (`go`) follows its segments, so a thumb wobbling back at a corner can't
+  flip it. Fill-ins only go into empty slots; take-backs only remove what the stroke put into an empty slot. Walls on
   other parallel lines don't hijack the stroke. A stroke is one undo step (`beginBatch` / `endBatch`); an erase stroke
   only removes one kind of thing on one floor (roof panels count as one kind).
+* Gaps: a tap (not a stroke) with a W-layer piece whose ray crosses the opening of an empty edge on the active floor
+  whose two ends both meet pieces of the same family (walls & openings together, else one fence / hedge / railing
+  kind) — before anything else it hits — fills that edge, so tapping through a missing wall segment doesn't land on
+  the floor or far wall behind it. Window / door tools aimed at a wall seen through the gap still swap that wall.
 * `selectPiece(id)`: a piece chosen from its own tray on a floor above its highest allowed level steps down to that
   floor with a gentle toast (garden pieces always do; never in guided mode); otherwise `_autoView` may pick a floor /
   cutaway for it (cozy things → a floor with a floor piece, cutaway on; roofs & gables → every floor shown).
@@ -381,7 +396,8 @@ game works from any subpath (GitHub Pages: `/hearthwood/`); the manifest's `star
 * `?showcase=<category>` lays out every piece of a category in every material (rows = pieces, columns = materials) at level 0
   starting at cell (−9, −9), 2 cells apart; a category with more than 10 pieces wraps into side-by-side blocks of
   10 rows (centred on the lot). `?showcase=all` is a contact sheet: every piece once (default material), 10 per row,
-  2 cells apart, all on the lot. The camera frames the layout.
+  2 cells apart, all on the lot. The camera frames the layout (from the usual angle when it fits; a narrow portrait
+  phone gets a higher / squarer view, and if needed the showcase page lifts `rig.maxRadius` to 150 to fit it).
 * `?clean=1` start empty · `?nosave=1` don't autosave · `?ui=0` no UI · `?bp=<id>` stamp a blueprint ·
   `?time=0.8` · `?season=winter` · `?weather=rain` · `?level=1` · `?seeAll=1` · `?cam=theta,phi,radius,tx,ty,tz` ·
   `?welcome=1` show the welcome card · `?thumbs=0` no blueprint pictures · `?batch=0|batchsize=n|batchglass=1` (batching).

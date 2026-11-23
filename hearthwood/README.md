@@ -89,8 +89,11 @@ Keys do nothing while you are typing in a text box (the build name, a share code
 **Look and Draw.** In Look mode (✋) one-finger drags turn the view. In Draw mode (✏️) they place a row of pieces
 instead; pinch, twist and two-finger drags still move the camera. A small *Draw* chip under the menu button reminds
 you it is on (tap it to go back to Look). Wall-like pieces keep to their grid line while your finger drifts a little.
-A sharp turn makes a corner, and drifting off sideways moves the row onto the next line. A whole stroke, like a
-stamped blueprint, a loaded build or a new meadow, is one Undo step.
+A sharp turn makes a corner at the grid point nearest your finger: overshoot it a little and the extra bit is taken
+back, and the new side fills in from the corner. Drifting off sideways moves the row onto the next line. A whole
+stroke, like a stamped blueprint, a loaded build or a new meadow, is one Undo step.
+
+**Mending a gap.** Tap the middle of a missing wall segment, between two walls, and the wall goes right into the gap.
 
 **The pieces counter** (🪵) counts everything you've placed.
 
@@ -116,9 +119,11 @@ see inside, unless you're holding a garden piece or a path. The rail's **All / C
   face each other, and **Height** ▲▼ to nudge a panel. Tapping low on a wall face, far from its top, gets a gentle
   *"Tap the top of a wall to rest the roof on it"* instead of a panel in the wrong place.
 - **Gables:** pick a **Gable Wall** or **Gable Window** and tap the open triangle at either end of the roof. It fits
-  itself to the slope, gentle or steep. Over the top floor it takes the place of the wall below as one tall piece.
-- **Chimney:** stand it in a room, or tap it onto the roof and it stands in that spot on the floor below. It has a
-  crackling hearth, and smoke curls from its pots.
+  itself to the slope, gentle or steep. Over the top floor it takes the place of the wall below as one tall piece,
+  in that wall's material and colour. A window or door there stays put: the gable won't cover it.
+- **Chimney:** stand it in a room, or tap it onto the roof and it stands in that spot on the floor below. Its stack
+  grows tall enough to poke out of the roof above it, even up by the ridge. It has a crackling hearth, and smoke curls
+  from its pots.
 - Hip corners, valley corners (for L-shaped houses), flat roofs, skylights and a pyramid cap round things out.
 
 ## Pieces

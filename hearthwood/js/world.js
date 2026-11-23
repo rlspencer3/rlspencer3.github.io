@@ -616,6 +616,7 @@ export function mergeByMaterial(root) {
   });
   const out = new THREE.Group();
   out.name = root.name || 'piece';
+  if (root.userData.emitterOffset) out.userData.emitterOffset = root.userData.emitterOffset;   // (env.js smoke)
   for (const [material, meshes] of groups) {
     const geos = [];
     let cast = false, receive = false;

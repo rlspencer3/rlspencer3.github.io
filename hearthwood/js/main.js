@@ -318,19 +318,28 @@ function buildShowcase(cat) {
   world.load({ pieces });
   state.set({ seeAll: true, level: 0 });
   app.showcase = { cat, rows: all ? Math.ceil(defs.length / ROWS) : defs.length, pieces: pieces.length };
-  // frame the layout: the closest view (from the usual angle) that keeps every corner of its box on screen
+  // frame the layout: the closest view that keeps every corner of its box on screen — from the usual angle, else
+  // a little higher up (uses a tall portrait screen) or squarer on (the box's width instead of its diagonal); a
+  // layout still too wide for a narrow phone lets this dev page zoom out further than play allows (a top-down view
+  // would fit sooner but hide the pieces' faces)
   if (!pieces.length) return;
   const X0 = x0 * CELL, X1 = (x1 + 1) * CELL, Z0 = z0 * CELL, Z1 = (z1 + 1) * CELL;
   const t = [(X0 + X1) / 2, 1, (Z0 + Z1) / 2], v = new THREE.Vector3();
-  for (let r = 14; ; r *= 1.05) {
-    rig.setView({ t, th: 0.6, ph: 0.95, r }, true);
-    let inside = true;
-    for (let i = 0; i < 8 && inside; i++) {
+  const fits = (th, ph, r) => {
+    rig.setView({ t, th, ph, r }, true);
+    for (let i = 0; i < 8; i++) {
       v.set(i & 1 ? X1 : X0, i & 2 ? 2.5 : 0, i & 4 ? Z1 : Z0).project(camera);
-      inside = Math.abs(v.x) < 0.9 && Math.abs(v.y) < 0.94;   // tall pieces stick out of the box a little
+      if (Math.abs(v.x) >= 0.9 || Math.abs(v.y) >= 0.94) return false;   // tall pieces stick out of the box a little
     }
-    if (inside || r >= rig.maxRadius) break;
-  }
+    return true;
+  };
+  const closest = (th, ph) => {
+    for (let r = 14; r < rig.maxRadius * 1.05; r *= 1.05) if (fits(th, ph, Math.min(r, rig.maxRadius))) return true;
+    return false;
+  };
+  if (closest(0.6, 0.95) || closest(0.6, 0.78) || closest(0.25, 0.85)) return;
+  rig.maxRadius = Math.max(rig.maxRadius, 150);
+  closest(0.25, 0.85);
 }
 
 // ------------------------------------------------------------------ loop
