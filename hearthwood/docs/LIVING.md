@@ -821,12 +821,29 @@ their heads to each other and take the `chat` pose's gestures and bounces; passi
 * Asleep → lying in **their bed**: body along the bed's local Z, head toward local −Z (the headboard), centre at local
   (0, 0.62, −0.10), a quilt in their own outfit colour (lighter) pulled up to the chest, its top edge folded back in
   cream (legs hidden by the lie flag). Every lying pose puts the head toward `face` (§12.3; M2 fixed actors, which had
-  it at the foot). Campers lie at the tent mouth with the head into the tent.
+  it at the foot). Campers lie at the tent mouth with the head into the tent, tent-mates side by side 0.9 m apart (§6.5).
 * Awake in the `home` phase → seated in the first free `armchair` / `sofa` (2 seats, x ±0.4) / `rocking_chair` /
-  `chair` of the home (facing local +Z, seat y 0.45); else standing 0.75 m in front of `kitchen_range` (always for the
-  Baker), `desk` or `fireplace` / `wood_stove`, facing it; else standing at the centre cell of FOOT.
-* `waiting` villagers sleep on a sofa (lying along it, centred), armchair or rug spot, else lie at the building's centre
-  cell ("a bedroll by the hearth").
+  `chair` of the home (facing local +Z, seat y 0.45; a `chair` sits on its drawn seat, which tucks up to a table in
+  the cell in front of it: local z 0.9 turned like the table, 0.66 a quarter turn from it, else 0.05. config.js
+  `CHAIR_SEAT_Z` / `chairTuck()` drive both the piece and the sitter, R6 T6.1); else standing 0.75 m in front of `kitchen_range` (always for the
+  Baker), `desk` or `fireplace` / `wood_stove`, facing it (three stands side by side: in the middle, then 0.55 m to
+  either side); else standing on the free floor: the FOOT cells nearest its middle that hold **no bed or other
+  furniture** (an I-slot piece; a rug is fine), five stands a cell (the middle, then 0.6 m to each side, facing the
+  middle); when every floor cell is furnished, sitting on the side of one's own bed.
+* `waiting` villagers sleep on a sofa (lying along it, centred), armchair or rug spot, else lie on the free floor
+  ("a bedroll by the hearth": the middle of a free cell, then 0.6 m to either side).
+* **Every indoor pose holds its place** (§6.5; R5 T5.1): a seat, a stand by a piece, a floor stand or bedroll, the bed.
+  "First free" means free for this villager: no housemate holds it or a body near it. The place is booked when the plan
+  is made if it is the plan's first (housemates going home in the same second each see the other's), and again as the
+  indoor step starts, which moves it to another free place of the same kind when its own was taken meanwhile. A
+  resident always sleeps in their own bed (beds are never shared). Only when nothing at all is free does a villager
+  pose at the middle of FOOT holding nothing (a backstop in actors still draws them apart).
+* **A place is looked up in the world as it stands now** (R6 T6.2): as the indoor step starts (it may have been planned
+  before the player furnished its floor cell) and after every recompute while the villager is posed there. A place
+  that is gone (its floor cell now holds an I-slot piece; its seat, bed or piece erased) or has moved (a turned piece; a
+  table set before or taken from a chair, which moves the chair's seat) is booked again at once: the same place where
+  it now is while free, else another free place of the same kind, the rest of the step kept, and the actor eases
+  over. A place unchanged in the world is left alone. Furnishing a home never leaves a housemate inside the new piece.
 * A tiny 💤 bubble shows above a sleeping home's roof when the camera target is within 25 m.
 
 ---
@@ -913,23 +930,35 @@ every 0.25 m) fails within 0.35 m of such a vertex.
 
 ### 6.5 Crowding
 
-* **One place per villager, never shared** (R3 T3.3, R4 T4.4: two villagers posed on one point are drawn as one figure
-  with two hats). A villager holds one outdoor place at a time: its key (a seat or spot id, `cell|x|z` for a stand-by
-  or wander cell, `stand|x|z|k` for a door slot, `tent|x|z|k`) and its ground point. A place is free when no other
-  villager holds its key and none holds a point within `SPOT_GAP` (0.45 m; the nearest two seats of one piece are
-  0.6 m apart), so two keys naming one point can never put two villagers there. Every picker (seats, hangouts, porch,
-  stand-by cells, wander and path cells, the woodpile's front) takes only free places. The plan's first place is held
-  as the plan is made (housemates and neighbours plan within one exit window), each later stop's as its walk starts,
-  and a stop whose place another villager holds by then is dropped (the next step, or a fresh plan, takes over):
-  a hold is never overwritten. Holding a new place lets go of the old one; ending the activity lets go of it.
+* **One place per villager, never shared** (R3 T3.3, R4 T4.4, R5 T5.1/T5.2: two villagers posed on one point are drawn
+  as one figure with two hats). A villager holds one place at a time, outdoors or indoors: its key (a seat or spot id,
+  `cell|x|z` for a stand-by or wander cell, `stand|x|z|k` for a door slot, `tent|x|z|k` for a camper's place by its
+  tent (x, z: that place's cell), and indoors `bed|x|y|z`, `seat|type|x|y|z|lx`, `by|x|y|z|k`, `floor|x|y|z|k`,
+  `bedside|x|y|z|k`) and its body: its point, or for a lying villager (a camper, a sleeper) the segment `LIE_HALF`
+  (0.55 m) either side of the body's centre along its face. A place is free when no other villager holds its key and
+  no other held body comes within `SPOT_GAP` (0.45 m; the nearest two seats of one piece are 0.6 m apart) of it, so two
+  keys naming one point can never put two villagers there, and nobody is booked onto a sleeper. Every picker (seats,
+  hangouts, porch, stand-by cells, wander and path cells, the woodpile's front, the camp, every indoor place, §5.7)
+  takes only free places. The plan's first place (its first pose, or its first indoor step) is held as the plan is
+  made (housemates and neighbours plan within one exit window), each later stop's as its walk or indoor step starts;
+  an outdoor stop whose place another villager holds by then is dropped (the next step, or a fresh plan, takes over),
+  an indoor one moves to another free place of its kind: a hold is never overwritten. Holding a new place lets go of
+  the old one; ending the activity lets go of it.
 * **Door slots**: every doorstep pose (lunch with no seat, a door chat, sweeping, the porch's own-doorstep spot, the
   postie's and the baker's knock, a sweet tooth admiring the baker's door, the wave after a move-in, the first chore's
   sweep) stands on one of the door's 5 slots: the stand point, 0.7 m either side of it, a step (0.8 m) further out
   ±0.35 m. Sweeping takes only the stand point (one sweeper a door); a porch deck spot on the doorstep cell is left to
-  the slots. Two campers waiting by their tent stand either side of its mouth.
+  the slots.
+* **The camp** (R5 T5.2): tent-mates take the two places across their tent's mouth, 0.45 m either side of its middle
+  (lying head into the tent at night, sitting facing out at home time, standing when they wait by it). When the mouth
+  cell is built over, the same two places across the nearest free cell in sight of the tent (no blocked cell on the
+  line from the tent to it), facing the tent; when both places there are held, the next cell's (within 4 cells; else
+  a wander). So campers never share a point, even when more campers than tents share `CAMP_CELLS[0]`.
 * Cosmetic separation steering in actors (radius 0.55 m, lateral offset ≤ 0.3 m, never changes the logical position).
-  A backstop for posed villagers: two posed nearer than 0.45 m are drawn apart to 0.45 m (eased; coincident ones split
-  along the lower id's left–right axis), so even a pose the sim did not book never reads as one figure.
+  A backstop for posed villagers, outdoors and indoors (on one storey): two posed nearer than 0.45 m are drawn apart
+  to 0.45 m (eased; coincident ones split along the lower id's left–right axis), so even a pose the sim did not book
+  never reads as one figure. A lying body counts as the segment 0.5 m either side of its centre and is never moved:
+  a villager posed on it is drawn the whole way off it (to its side when exactly on it).
 * Head-on in a one-cell gap: the lower-priority walker (Shy first, else the higher id) waits 0.6 s with a little bow.
 * A second villager heading for the same doorstep waits a step back.
 * (Not built in Phase 1: the two waits above. Walks are timed plans the sim chains deterministically, so a wait has to
@@ -1338,7 +1367,10 @@ Strings never use pronouns (§2.4).
   scale), and ride the edge off screen within `rig.maxRadius` + 30 m (R3 T3.2, R4 T4.2: a portrait phone frames the
   stamped farmhouse from 48–55 m and the rig pulls back to 80 m, so a wisher plainly in view can be 75–110 m away).
 * At most **6** tappable bubbles shown, by priority: traveller > wish > camp > fix-up > almost > vacancy > dream,
-  nearest first. Up to 3 sleep 💤 bubbles. Bubbles closer than 36 px merge into one "×2" (tapping it opens the first).
+  nearest first. Up to 3 sleep 💤 bubbles. Bubbles closer than 36 px merge into one "×2" (tapping it opens the first;
+  its label adds "and 1 more"). Edge bubbles merge with each other the same way when their edge points are closer than
+  their 48 px circle (R6 T6.3: housemates indoors share the roof anchor, so off screen, or in a cutaway close-up with
+  the roof above the top bar, their arrows landed on one point and one hid the other).
 * **Wish and dream bubbles never vanish off an edge** (M2 feel check): off-screen (in front of the camera, within
   `rig.maxRadius` + 30 m) they ride the free area's edge with an arrow, as a traveller's does; on screen they are kept at least
   24 px (× scale) inside its sides and 50 px below its top. The same keep-inside clamp holds for every other tappable
@@ -1601,7 +1633,9 @@ is presentation only: bubbles, 💤, sfx range). `store.js` may touch `localStor
 * Yaw: radians about +Y, 0 = facing +Z (the pieces' convention).
 * Building id: `'b:' + key` of its lowest cell (lowest y, then z, then x), formatted `x|y|z`. This is a runtime handle;
   persistent identity is the villager's stored footprints (§3.5).
-* Villager id `'v' + n`, from the save's `nextId`, never reused.
+* Villager id `'v' + n`, from the save's `nextId`, never reused. A traveller is `'v' + nextId` while on the way and
+  takes the number as it joins the roster (nextId + 1); `debug.spawn` skips any id in use, a traveller's included (R6
+  T6.4: a villager spawned while one was on the way got its id and the two shared one actor).
 * Time: `clock` (town seconds) everywhere in the sim and in plans. `TICK` = 0.25 s.
 
 ### 12.3 Data contracts (shared by every WP; changes go through the spec owner, §13.5)
@@ -1988,7 +2022,8 @@ flow-default switch (its text is data.js `STATUS_TEXT.flowDefault`).
 | `js/main.js` | 4 | (1) `app` gains `town: null`. (2) piece loop `['floors', 'walls', 'roof', 'decor', 'gifts']`, so gift pieces always register, villagers on or off. (3) after blueprints: `setLoading('Waking the village…', 0.8); app.town = await loadModule('town', './town/index.js');` (before ui). (4) in `frame()`, after the blueprints line: `try { app.town?.update?.(dt); } catch (e) { reportError('town.update', e); app.town.update = null; }` (index.js's `update` does nothing until its restore recompute on `ready`, §3.8). (5) autosave hook: `let savedView = restored && !(dropped > 0) ? JSON.stringify(rig.getView()) : null;`, so a restore that dropped unknown pieces (gifts met by an older cached version) is never overwritten by a camera-only flush; edits still save. `dropped = (saved.dropped || 0) + (saved.pieces.length − app.loadBuild(saved))`, computed where the autosave is restored: `storage.sanitize` keeps records of unknown ids and only `world.load` skips them, so `saved.dropped` alone never counts them (M0). Nothing else. |
 | `js/state.js` | 4 | `defaults` gains `village: true` and `chatter: true`; both go in `PERSIST` (booleans are already validated by `cleanSetting`). |
 | `js/env.js` | 4 | `const LANE` → `export const LANE`; `const DAY_SECONDS` → `export const DAY_SECONDS` (index.js reads them through `app.modules.env`, falling back to `LANE_FALLBACK` / 600). M2 (feel check): the lingering dusk of §5.1 (`sunTime(t)`, used for the sun and moon only), and a smoke emitter's alpha × `def.smokeAlpha` (default 1). |
-| `js/pieces/decor.js` | 4 (M2) | `fire_pit`: `emitterOffset` [0, 1.0, 0] (was 0.35) and `smokeAlpha: 0.45`, a thin wisp that starts above head height so whoever sits round the fire stays in view. |
+| `js/pieces/decor.js` | 4 (M2) | `fire_pit`: `emitterOffset` [0, 1.0, 0] (was 0.35) and `smokeAlpha: 0.45`, a thin wisp that starts above head height so whoever sits round the fire stays in view. R6 T6.1: the Ladder-back Chair's `nb` and seat place come from config.js `chairTuck()` / `CHAIR_SEAT_Z` (the same codes and values as before, so the chair is drawn exactly as it was). |
+| `js/config.js` | 4 (R6) | `CHAIR_SEAT_Z` and `chairTuck(p, itemAt)`: where the Ladder-back Chair's seat sits along its local +Z, tucked up to a table in front of it (0.9 / 0.66 / 0.05 m). Pure; read by decor.js (the piece) and town/sim.js (the sitter, §5.7), so the two never drift apart. |
 | `js/blueprints.js` | 4 (M2) | With villagers on and drawn (`app.town?.enabled()` and the `'town'` group in the scene, so not with `townrender=0`), a stamp ("Place it instantly") is followed, once the cascade is done, by the finishing glide (any touch of the camera cancels it), which then frames the garden too (trees aside), pulling back at most ×1.15 (`finishView(bp, cap)`), so the bench and the hive where the routine plays out are in the portrait shot. Villagers off: unchanged. |
 | `js/catalog.js` | 4 | add `export function setHidden(id, hidden) { const d = registry.get(id); if (d) d.hidden = !!hidden; return !!d; }`, and document `gift` / `walk` in the `registerPiece` comment. |
 | `sw.js` | 4 | add `./css/town.css`, `./js/pieces/gifts.js` and all 14 `./js/town/*.js` (§12.1) to `CORE`; `VERSION` 4 → 5. (Done in M1, as soon as main.js loaded gifts.js and the town at boot, so offline play never misses a module.) |
@@ -2000,9 +2035,9 @@ flow-default switch (its text is data.js `STATUS_TEXT.flowDefault`).
 | `js/audio.js` | 3 | (1) `SFX` + `GAP` entries of §11.1. (2) `events.on('sfx', d => play(d.name, d.flavor, d.opts))`; `play` merges `extra` into `o` (already supported); `opts` also takes `gain` (0..2) and `pan` (−1..1). (3) `computeEnv`: `const a = app.town?.audible?.()`; `E.talkers = state.chatter && a ? a.talkers : []`; foley queue (≤ 3); an `evening` flag. (4) `Ambience.schedule`: a chatter voice and foley (§11.2). (5) `stats().amb.chatter` and `.foley` counters for tests. (Also fixed: a pre-existing click in the `place` leaf flavour, burst spacing 0.026 → 0.031 s.) |
 
 **Not edited:** `world.js`, `batcher.js`, `builder.js`, `storage.js`, `effects.js`, `camera.js`,
-`thumbs.js`, `materials.js`, `geom.js`, `config.js`, `js/pieces/{floors,walls,roof}.js`, `tools/shot.mjs`,
-`css/style.css`, `css/ui.css`, `manifest.webmanifest`. If a WP believes one of these needs a change, it raises it with
-the spec owner (§13.5) instead of editing.
+`thumbs.js`, `materials.js`, `geom.js`, `config.js` (but for R6's two pure exports above), `js/pieces/{floors,walls,roof}.js`,
+`tools/shot.mjs`, `css/style.css`, `css/ui.css`, `manifest.webmanifest`. If a WP believes one of these needs a change, it
+raises it with the spec owner (§13.5) instead of editing.
 
 ### 12.7 Input, camera and Show me wiring (index.js)
 
@@ -2428,7 +2463,7 @@ build them with `world.add(…, { record: false })` after `world.clear`):
 | B6 | Never stuck: a villager walled in on 4 edges, a pond dropped on a villager, and a fence ring around a villager all give `stuck()` = `[]` after `setWorld` + 1 tick; the pond case uses a `hop` plan to a cell ≤ 2 away; the fence-ring villager and villagers living in N1 / N2 get **no** hop or slip plan (their cells are in `mainRegion`). |
 | B7 | Store: 2,000 random mutations of a valid save (including `feet`, `muted`, `campGrants`, `frozen`) never make `sanitizeTown` throw and always yield a valid save; serialize → sanitize → `createSim` → serialize is identical; a `v: 2` save loads with `readOnly: true`. |
 | B8 | Re-binding and settling: (a) cottage resident → `world.clear` → no change before 3 s of quiet, then one `status` event with the camper → undo → `resident` with the same bed key; (b) roof removed and put back within 2 s → 0 events; (c) roof removed 20 s → `waiting`, put back → resident, no `fixed` event, Warmth unchanged; (d) roof removed 70 s (bubble shown) → put back → resident + `fixed` + `COZY_FIX`; (e) an open wish is dropped on commit (no `expired` event, no cooldown) and the next wish comes 60 s after the commit; (f) load the farmhouse (`world.load`, record) → resident in the farmhouse bed, then load the cottage again → back in the cottage bed (feet); (g) two villagers and one bed: the later arrival camps; a new bed → one camp thank-you (+12, once), and moving the bed back and forth gives no second one for the same bed key; (h) a traveller whose target vanishes turns back, is not in `villagers`, and never camps. |
-| B9 | Timing (desktop headless): `buildWorldModel` farmhouse average ≤ 1.5 ms over 20 runs; a 1,000-piece lot ≤ 4 ms; `tick` with 20 villagers ≤ 0.1 ms average. On a shared, loaded machine one batch can take twice the next (R1 T1.15), so the budgets are checked against the fastest of seven 20-run batches (farmhouse; five for the big lot and the recompute), with the median and a same-page calibration loop (`calibMs`) reported beside it; the owner's phone profiling keeps the absolute numbers. |
+| B9 | Timing (desktop headless): `buildWorldModel` farmhouse average ≤ 1.5 ms over 20 runs; a 1,000-piece lot ≤ 4 ms; `tick` with 20 villagers ≤ 0.1 ms average. On a shared, loaded machine one batch can take twice the next (R1 T1.15), so the budgets are checked against the fastest of seven 20-run batches (farmhouse; five for the big lot and the recompute; five 120 s batches of the 20-villager tick, R5 T5.3: one 600 s sample flaked), with the median and a same-page calibration loop (`calibMs`) reported beside it; the owner's phone profiling keeps the absolute numbers. |
 | B10 | Purity: `node -e "import('./js/town/sim.js').then(m => console.log(typeof m.createSim))"` prints `function` (no three, DOM or window at import). |
 | B11 | Restore: a sim with 2 homes serialized and re-created on the same world → `setWorld(model, { restore: true })` gives 0 events and identical bindings; with one home erased → its residents are `camping` at once, 0 events, and `note` mentions them. |
 | B12 | Cozy: the §9.1 worked examples come out exactly (Cozy 34 at the cottage's move-in, 50 after S, M, M grants; the floor of 17 for a bare home), and a 600 s `advance` with warmth 60 and no grants loses 13–16 points. |
@@ -2497,6 +2532,8 @@ build them with `world.add(…, { record: false })` after `world.clear`):
 | R2 (`repair2`) | Round-2 repairs (T2.x), real touch on an iPhone 13 profile: the camp bubble high on screen is never covered by its one-time tip toast and goes back under its anchor once the toast has gone; the camp Show me with no Home (and the `w_neighbour` one) draws its ghost foundation as one mesh with a finite box, `highlightHit` at the free area's four corners is −1, and with the foundation in hand a tap on grass far from the rings builds there while a tap on a ring builds on it; after a reload with the tray collapsed the handle reads "Show pieces" (`aria-expanded` false). |
 | R3 (`repair3`) | Round-3 repairs (T3.x), real touch on an iPhone 13 profile: the camp Show me draws exactly one ring per foundation (no roof or bed ring floating over the plan), each a hit; the fire circle's later rings (benches) are at most 0.6× the size and 0.4× the brightness of the fire pit's, at its height; on the stamped farmhouse framed from ≈ 48 m a wish anchored > 45 m from the camera, villager on screen, still shows its bubble; a window-boxes Show me and a door-hint Show me, each with a villager posed on the spot: a real tap on the villager swaps the piece in (one undo step) and opens no card; with the camp Show me's checklist chip up and the camp bubble's anchor under it, the bubble moves clear and a real tap on it opens the camp card; two residents of a 2-bed hut with no outdoor seat take two doorstep spots ≥ 0.6 m apart at lunch (600 ticks stepped); three wishes of one villager granted in one town day get three different thank-you lines. |
 | R4 (`repair4`) | Round-4 repairs (T4.x), real touch: on an iPhone 13, the farmhouse Farmer's fire-circle wish opened and Show me tapped, then the camera moved so his anchor sits just above the free area's top: his edge bubble never overlaps the checklist chip, is topmost at its centre, and a real tap on it opens his card; on a 412 × 915 phone the stamped farmhouse's wisher on the farthest on-screen walkable cell (> 75 m) shows his bubble, and so does the wisher at the veg beds after four real pinch-outs to r 80; a flowing town day with 8 villagers in the cottage and two huts (seed 12): no two posed outdoors within 0.35 m, no two held places within 0.45 m, nobody stuck, and lunch, work, chores and hangouts all happen; two villagers posed on one point in the sim are drawn ≥ 0.4 m apart. |
+| R5 (`repair5`) | Round-5 repairs (T5.x), on an iPhone 13: the cottage with a second bed, the Gardener and the Baker through a flowing evening (seed 8): when both sit at home each has a seat of their own, and a real tap on the rail's eye opens the cutaway with the two drawn > 1 m apart; the 2-bed hut (seed 4) through an evening and night: the one up indoors never stands on a bed or furniture cell; 20 campers with a shed built over two tent mouths, at 22:48 and 22:12: every camper posed at the camp holds a place of their own and the built-over tent's mates are ≥ 0.9 m apart; the drawn backstop moves a villager posed on a lying camper ≥ 0.4 m off the body (the sleeper stays put) and two posed on one indoor point ≥ 0.4 m apart; the **overlap audit**: a full flowing day (2400 ticks) on six layouts (the farmhouse and four huts with 12 villagers, a seatless cottage with 4 and with 2 housemates, a 2 × 2 hut of four beds, an empty lot with 6 campers, a camp with two mouths built over), no two villagers (traveller and passer-by included) posed within 0.3 m, standing, sitting or lying (as a 1 m body), indoors or out, at any tick (two chatting face to face would be let through; none come that near), nobody stuck; the 20-villager tick on `PERF_TOWN` ≤ 0.1 ms on the fastest of five 120 s batches, as B9 now judges it. Every check above but the last fails on the pre-repair sim. |
+| R6 (`repair6`) | Round-6 repairs (T6.x), on an iPhone 13: the cottage with a second bed, the Gardener and the Baker through a flowing evening (seed 10): the housemate in a dining chair a quarter turn from the table is posed and drawn on the chair's drawn seat (the centre of the chair's drawn box; tucked 0.66 m toward the table), seen in the cutaway after a real tap on the rail's eye; the table erased and put back with undo: the sitter follows the seat to its cell's middle and back; the farmhouse with three residents (seed 21): a chair turned like its table, tucked 0.9 m, the sitter on it; config.js `chairTuck` / `CHAIR_SEAT_Z` drive both decor.js and sim.js; the 2-bed hut (seed 4): a real tap places a Farmhouse Table on the floor cell where a housemate stands, and they move at once to another free place, posed and drawn off the table; the armchair erased under its sitter and a floor cell furnished before a planned indoor step starts: neither villager left in mid-air or inside the piece; two housemates indoors with a wish each, panned off screen by real two-finger slides and seen in a cutaway close-up: one ×2 edge bubble ('and 1 more'), never two on one point; `debug.spawn` twice while a traveller is on the way: ids unique and the traveller later moves in with its own. Every check but the console one fails on the pre-repair build. |
 | R21 | Life you can watch: `PERF_TOWN`, `spawn=20`, `timeFlow` on, `townspeed=60`, `advance(3600)` → `debug.outdoors()` ≥ 0.85; time pinned at 0.42 → ≥ 0.95. (M2 also checks that after the hour, at 10:00, nobody is asleep or on a night stroll.) |
 
 ### 13.5 Rules for working in parallel

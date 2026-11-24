@@ -13,6 +13,7 @@
 const BUBBLE_MAX = 6;          // tappable bubbles shown at once
 const SLEEP_MAX = 3;           // 💤 bubbles shown at once
 const MERGE_PX = 36;           // bubbles closer than this merge into one "×n"
+const EDGE_MERGE_PX = 48;      // edge bubbles (a 48 px circle) whose edge points are closer than this merge too
 const CULL_M = 45;             // hidden beyond this camera distance (m)
 const WISH_REACH_M = 30;       // wish and dream edge arrows: within the rig's furthest pull-back + this (≈ the lot's half-diagonal)
 const NEAR_M = 20, FAR_M = 40; // scale 1.0 at ≤ 20 m down to 0.8 at 40 m
@@ -443,12 +444,16 @@ export function createHud(app, { root, topLeft, toast, ask } = {}) {
       keepIn(item, dist, fl, ft, fr);                // camp, fix-up, almost, vacancy, gift: clear of the bars (T1.10)
       taps.push(item);
     }
-    // priority, nearest first; merge neighbours closer than 36 px; at most 6
+    // priority, nearest first; merge neighbours closer than 36 px; at most 6. Edge bubbles merge with each other the
+    // same way when their edge points are closer than their 48 px circle (R6 T6.3): housemates indoors share the
+    // roof anchor, so off screen (or in the cutaway, with the roof above the top bar) their two arrows landed on one
+    // point, one hiding the other with no ×2
     taps.sort((a, c) => (ORDER[a.b.kind] ?? 9) - (ORDER[c.b.kind] ?? 9) || a.dist - c.dist);
     const shown = [];
     for (const it of taps) {
       if (shown.length >= BUBBLE_MAX) break;
-      const near = !it.edge && shown.find((s) => !s.edge && Math.hypot(s.x - it.x, s.y - it.y) < MERGE_PX);
+      const near = it.edge ? shown.find((s) => s.edge && Math.hypot(s.edge.x - it.edge.x, s.edge.y - it.edge.y) < EDGE_MERGE_PX)
+        : shown.find((s) => !s.edge && Math.hypot(s.x - it.x, s.y - it.y) < MERGE_PX);
       if (near) { near.count++; continue; }
       shown.push(it);
     }

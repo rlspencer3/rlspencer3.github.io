@@ -57,5 +57,18 @@ export function slotKey(def, p) {
   throw new Error('unknown layer ' + def.layer);
 }
 
+// The Ladder-back Chair tucks up to a table in the cell in front of it (its local +Z): its seat's centre sits this far
+// along local +Z from the cell centre, by the tuck code chairTuck() gives ('z': the chair and the table turned alike,
+// 'x': a quarter turn apart, '': no table in front). The piece (pieces/decor.js) draws its seat there and a villager
+// sits there (town/sim.js), so the two can never drift apart (R6 T6.1).
+export const CHAIR_SEAT_Z = Object.freeze({ z: 0.9, x: 0.66, '': 0.05 });
+/** Tuck code of chair record p; itemAt(x, y, z) → the I-layer record in that cell, or null. */
+export function chairTuck(p, itemAt) {
+  const r = (p.r | 0) & 3, f = DIRS[r];
+  const t = itemAt(p.x + f[0], p.y, p.z + f[1]);
+  if (!t || t.t !== 'table') return '';
+  return ((r - (t.r | 0)) & 1) ? 'x' : 'z';
+}
+
 export const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 export const lerp = (a, b, t) => a + (b - a) * t;

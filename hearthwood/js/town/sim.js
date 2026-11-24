@@ -3,7 +3,7 @@
 // wishes, Cozy and gifts. Pure logic on fixed TICK steps: no three, no DOM, no window, never any camera data, and
 // every random choice goes through rng.js seeded from the town seed and the villager seed.
 
-import { CELL, levelY } from '../config.js';
+import { CELL, levelY, CHAIR_SEAT_Z, chairTuck } from '../config.js';
 import {
   TUNE, JOBS, JOB_ORDER, TRAITS, TRAIT_ORDER, NAMES, LINES, GIFTS, GIFT_IDS, CAMP_CELLS, SETS, SPOT_DEFS, STATUS_TEXT,
   WISH_TEXT, HINT_TEXT, LOOK,
@@ -77,7 +77,7 @@ export function createSim({ save = null, readOnly = false } = {}) {
     return v;
   }
   function initInner(v) {
-    v._loc = 'gone'; v._cell = null; v._pos = null; v._steps = []; v._act = null; v._phase = null; v._spot = null; v._spotAt = null;
+    v._loc = 'gone'; v._cell = null; v._pos = null; v._steps = []; v._act = null; v._phase = null; v._spot = null; v._spotAt = null; v._spotLie = null;
     v._jit = (rng(hash32(st.seed, v.seed, 'jit'))() * 2 - 1) * TUNE.SCHEDULE.jitter;
     v._grantUse = null; v._fadedAt = -Infinity; v._cueSched = []; v._bout = 0; v._roundAt = -Infinity;
     v._lunchAt = -Infinity; v._dreamDelay = false; v._statusAt = v.since || 0; v._deferred = false;
@@ -446,8 +446,12 @@ export function createSim({ save = null, readOnly = false } = {}) {
         return plan;
       }
       case 'inside': {
+        if (s.spot) claimInside(v, s);                   // its place, else another free one (R5 T5.1)
+        else release(v);                                 // a step that names no place: the one left behind is let go
         v._loc = 'in'; v._inHome = s.homeId;
-        return { kind: 'inside', homeId: s.homeId, level: s.level | 0, at: s.at, face: s.face ?? 0, pose: s.pose || 'stand', t0, t1: s.dur === Infinity ? Infinity : t0 + (s.dur ?? 30) };
+        // _kind / _rec / _spot: the place it stands for, so a recompute can check it is still there (recheckInside)
+        return { kind: 'inside', homeId: s.homeId, level: s.level | 0, at: s.at, face: s.face ?? 0, pose: s.pose || 'stand', t0, t1: s.dur === Infinity ? Infinity : t0 + (s.dur ?? 30),
+          _kind: s.kind || null, _rec: s.rec || null, _spot: s.spot || null };
       }
       case 'hop': {
         const to = cellCentre(s.to);
@@ -551,27 +555,48 @@ export function createSim({ save = null, readOnly = false } = {}) {
     if (du.back) return [{ k: 'walk', to: du.step }, { k: 'slip', to: insideSpot(v, b, 'stand').at }, ...then];
     return [{ k: 'walk', to: du.step, end: du.stand, door: b.id }, { k: 'door', dir: 'in', at: du.stand, face: du.face, homeId: b.id }, ...then];
   }
-  /** Indoor spot (§5.7). kind: 'sleep' | 'sit' | 'stand' | 'by' (beside a record). */
-  function insideSpot(v, b, kind, rec = null) {
+  /** Indoor place (§5.7, R5 T5.1). kind: 'sleep' | 'sit' | 'stand' | 'by' (beside a record). → { at, face, level, pose,
+   *  spot }: the first place free for v (placeFree: no housemate holds it or a body near it), so housemates never share
+   *  an armchair, a stand by the range or the middle of the floor. A resident sleeps in their own bed (never shared, so
+   *  always theirs). Seats, then a stand in front of a range / desk / fireplace / stove (three side by side), then the
+   *  free floor: the foot cells nearest the middle that hold no bed or other furniture, five stands a cell (a bedroll
+   *  takes the middle or a side); when all of those are taken, the edge of one's own bed; else the middle, holding
+   *  nothing (spot null). Pure: it books nothing (insideStep's step is booked by claimInside). want (a place key): that
+   *  place as it stands in the world now, free or not, else null (recheckInside, R6 T6.2). */
+  const BY_SLOTS = [0, -0.55, 0.55];                   // m sideways, 0.75 m in front of the piece
+  const FLOOR_SLOTS = [[0, 0], [0.6, 0], [-0.6, 0], [0, 0.6], [0, -0.6]];
+  const LIE_SLOTS = [[0, 0], [0.6, 0], [-0.6, 0]];     // bedrolls side by side, bodies along z
+  function insideSpot(v, b, kind, rec = null, want = null) {
     const ix = world.index;
     const fy = (x, y, z) => (y > 0 ? levelY(y) : ix.F.get(ck(x, 0, z)) ? levelY(0) : 0);
-    if (kind === 'sleep' && v.bed && v.status === 'resident') {
+    const free = want ? (sp) => sp.spot === want : (sp) => placeFree(sp.spot, sp.at, v, sp.pose === 'sleep' ? sp.face : null);
+    const bedOf = (strict) => {
+      if (!v.bed) return null;
       const [, x, y, z] = v.bed.split('|').map(Number);
       const bed = ix.I.get(ck(x, y, z));
-      if (bed) {
-        const r = bed.r | 0;
-        const [wx, wz] = localToWorld(x, z, r, 0, -0.10);
-        return { at: [wx, fy(x, y, z) + 0.62, wz], face: ((r + 2) & 3) * Math.PI / 2, level: y, pose: 'sleep' };
+      return bed && (!strict || (bed.t === 'bed' && b.cells.has(ck(x, y, z)))) ? { bed, x, y, z } : null;
+    };
+    if (kind === 'sleep' && v.status === 'resident') {
+      const o = bedOf(false);
+      if (o) {
+        const r = o.bed.r | 0;
+        const [wx, wz] = localToWorld(o.x, o.z, r, 0, -0.10);
+        const sp = { at: [wx, fy(o.x, o.y, o.z) + 0.62, wz], face: ((r + 2) & 3) * Math.PI / 2, level: o.y, pose: 'sleep', spot: `bed|${o.x}|${o.y}|${o.z}` };
+        if (!want || free(sp)) return sp;
       }
     }
     const inB = (p) => b.cells.has(ck(p.x, p.y, p.z));
     const items = ix.items.filter(inB);
-    const taken = new Set();
-    for (const u of villagers) if (u !== v && u._inHome === b.id && u.plan?.kind === 'inside' && u.plan._seat) taken.add(u.plan._seat);
-    if (kind === 'by' && rec) {
-      const [wx, wz] = localToWorld(rec.x, rec.z, rec.r | 0, 0, 0.75);
-      return { at: [wx, fy(rec.x, rec.y, rec.z), wz], face: Math.atan2(-Math.sin(((rec.r | 0) & 3) * Math.PI / 2), -Math.cos(((rec.r | 0) & 3) * Math.PI / 2)), level: rec.y | 0, pose: 'stand' };
-    }
+    const byPlace = (p) => {
+      const r = (p.r | 0) & 3, face = Math.atan2(-Math.sin(r * Math.PI / 2), -Math.cos(r * Math.PI / 2));
+      for (let k = 0; k < BY_SLOTS.length; k++) {
+        const [wx, wz] = localToWorld(p.x, p.z, r, BY_SLOTS[k], 0.75);
+        const sp = { at: [wx, fy(p.x, p.y, p.z), wz], face, level: p.y | 0, pose: 'stand', spot: `by|${p.x}|${p.y | 0}|${p.z}|${k}` };
+        if (free(sp)) return sp;
+      }
+      return null;
+    };
+    if (kind === 'by' && rec) { const sp = byPlace(rec); if (sp) return sp; }
     if (kind === 'sleep' || kind === 'sit') {
       const seats = [];
       for (const p of items) {
@@ -580,29 +605,52 @@ export function createSim({ save = null, readOnly = false } = {}) {
       }
       if (kind === 'sleep') { for (const p of items) if (p.t === 'rug' || p.t === 'rug_round') seats.push([p, 0, 'rug']); }
       seats.sort((a, c) => (a[0].t === 'sofa' || a[0].t === 'armchair' ? 0 : 1) - (c[0].t === 'sofa' || c[0].t === 'armchair' ? 0 : 1) || ci(a[0].x, a[0].z) - ci(c[0].x, c[0].z) || a[1] - c[1]);
+      const sleep = kind === 'sleep';
+      const itemAt = (x, y, z) => ix.I.get(ck(x, y, z)) || null;
       for (const [p, lx, rug] of seats) {
-        const key = `${p.x}|${p.y}|${p.z}|${lx}`;
-        if (taken.has(key)) continue;
-        const sleep = kind === 'sleep';
-        // asleep on a sofa: lying along it (head toward its local +X), centred on the whole sofa
+        // asleep on a sofa: lying along it (head toward its local +X), centred on the whole sofa. A dining chair's seat
+        // is drawn tucked up to the table in front of it (config.js CHAIR_SEAT_Z): sit there, not at the cell's middle
         const along = sleep && p.t === 'sofa';
-        const [wx, wz] = localToWorld(p.x, p.z, p.r | 0, along ? 0 : lx, along ? -0.05 : 0);
+        const lz = along ? -0.05 : p.t === 'chair' ? CHAIR_SEAT_Z[chairTuck(p, itemAt)] : 0;
+        const [wx, wz] = localToWorld(p.x, p.z, p.r | 0, along ? 0 : lx, lz);
         const yaw = ((p.r | 0) & 3) * Math.PI / 2 + (along ? Math.PI / 2 : 0);
-        return { at: [wx, fy(p.x, p.y, p.z) + (rug ? 0.1 : 0.45), wz], face: yaw, level: p.y | 0, pose: sleep ? 'sleep' : 'sit', seat: along ? `${p.x}|${p.y}|${p.z}|sofa` : key };
-      }
-      if (kind === 'sleep') {
-        const c = centreCell(b);
-        return { at: [(c[0] + 0.5) * CELL, fy(c[0], b.lo, c[1]) + 0.1, (c[1] + 0.5) * CELL], face: 0, level: b.lo, pose: 'sleep' };
+        const sp = { at: [wx, fy(p.x, p.y, p.z) + (rug ? 0.1 : 0.45), wz], face: yaw, level: p.y | 0, pose: sleep ? 'sleep' : 'sit', spot: `seat|${p.t}|${p.x}|${p.y | 0}|${p.z}|${along ? 'along' : lx}` };
+        if (free(sp)) return sp;
       }
     }
-    // standing in front of a range (Baker always), desk or fireplace / stove; else the centre of FOOT
-    const pref = v.job === 'baker' ? ['kitchen_range'] : ['kitchen_range', 'desk', 'fireplace', 'wood_stove'];
-    for (const t of pref) {
-      const p = items.find((q) => q.t === t);
-      if (p) return insideSpot(v, b, 'by', p);
+    if (kind !== 'sleep') {
+      // standing in front of a range (the Baker always), desk or fireplace / stove
+      const pref = v.job === 'baker' ? ['kitchen_range'] : ['kitchen_range', 'desk', 'fireplace', 'wood_stove'];
+      for (const t of pref) for (const p of items) if (p.t === t && p !== rec) { const sp = byPlace(p); if (sp) return sp; }
     }
+    // the free floor, nearest the middle first: never a cell with a bed or other furniture on it
+    const lo = b.lo | 0, mid = centrePoint(b);
+    const cells = b.foot.filter(([x, z]) => b.cells.has(ck(x, lo, z)) && !ix.I.has(ck(x, lo, z)))
+      .sort((p, q) => Math.hypot(p[0] + 0.5 - mid[0], p[1] + 0.5 - mid[1]) - Math.hypot(q[0] + 0.5 - mid[0], q[1] + 0.5 - mid[1]) || ci(p[0], p[1]) - ci(q[0], q[1]));
+    const sleep = kind === 'sleep';
+    for (const [x, z] of cells) {
+      const cx = (x + 0.5) * CELL, cz = (z + 0.5) * CELL, y = fy(x, lo, z);
+      const slots = sleep ? LIE_SLOTS : FLOOR_SLOTS;
+      for (let k = 0; k < slots.length; k++) {
+        const [ox, oz] = slots[k];
+        const face = sleep || (!ox && !oz) ? 0 : yawTo(ox, oz, 0, 0);
+        const sp = { at: [cx + ox, y + (sleep ? 0.1 : 0), cz + oz], face, level: lo, pose: sleep ? 'sleep' : 'stand', spot: `floor|${x}|${lo}|${z}|${sleep ? 'lie' : ''}${k}` };
+        if (free(sp)) return sp;
+      }
+    }
+    // nothing free (every floor cell furnished): awake, on the edge of one's own bed, facing out of its side
+    const o = kind !== 'sleep' && v.status === 'resident' && bedOf(true);
+    if (o) {
+      const r = o.bed.r | 0;
+      for (const sd of [0.6, -0.6]) {
+        const [wx, wz] = localToWorld(o.x, o.z, r, sd, 0.25);
+        const sp = { at: [wx, fy(o.x, o.y, o.z) + 0.5, wz], face: ((r + (sd > 0 ? 1 : 3)) & 3) * Math.PI / 2, level: o.y, pose: 'sit', spot: `bedside|${o.x}|${o.y}|${o.z}|${sd > 0 ? 1 : 0}` };
+        if (free(sp)) return sp;
+      }
+    }
+    if (want) return null;
     const c = centreCell(b);
-    return { at: [(c[0] + 0.5) * CELL, fy(c[0], b.lo, c[1]), (c[1] + 0.5) * CELL], face: 0, level: b.lo, pose: 'stand' };
+    return { at: [(c[0] + 0.5) * CELL, fy(c[0], lo, c[1]) + (sleep ? 0.1 : 0), (c[1] + 0.5) * CELL], face: 0, level: lo, pose: sleep ? 'sleep' : 'stand', spot: null };
   }
   /** The building whose cells hold the indoor spot the villager is posed at (ids can change between recomputes). */
   function buildingAt(v) {
@@ -614,6 +662,11 @@ export function createSim({ save = null, readOnly = false } = {}) {
     const k = ck(Math.floor(p.at[0] / CELL), lv, Math.floor(p.at[2] / CELL));
     return world.buildings.find((b) => b.cells.has(k)) || (known && p.kind === 'door' ? known : null);
   }
+  /** The middle of a building's FOOT, in cell units (cell x + 0.5). */
+  function centrePoint(b) {
+    const f = b.foot;
+    return [f.reduce((a, c) => a + c[0], 0) / f.length + 0.5, f.reduce((a, c) => a + c[1], 0) / f.length + 0.5];
+  }
   function centreCell(b) {
     const f = b.foot;
     const mx = f.reduce((a, c) => a + c[0], 0) / f.length, mz = f.reduce((a, c) => a + c[1], 0) / f.length;
@@ -621,10 +674,12 @@ export function createSim({ save = null, readOnly = false } = {}) {
     for (const c of f) { const d = Math.hypot(c[0] - mx, c[1] - mz); if (d < bd) { bd = d; best = c; } }
     return best;
   }
+  /** An indoor step at a free place of `kind` (insideSpot). It names its place (`spot`), so it is booked as the plan is
+   *  made when it is the plan's first place, and as it starts (claimInside, which moves it to another free place of the
+   *  same kind when its own was taken meanwhile). */
   function insideStep(v, b, kind, dur, rec = null) {
     const s = insideSpot(v, b, kind, rec);
-    const step = { k: 'inside', homeId: b.id, pose: s.pose === 'sleep' ? 'sleep' : s.pose === 'sit' ? 'sit' : 'stand', at: s.at, face: s.face, level: s.level, dur };
-    return step;
+    return { k: 'inside', homeId: b.id, pose: s.pose === 'sleep' ? 'sleep' : s.pose === 'sit' ? 'sit' : 'stand', at: s.at, face: s.face, level: s.level, dur, spot: s.spot, kind, rec };
   }
   /** A standing spot beside a record (free neighbour cell in mainRegion nearest the villager), facing it. */
   function standBy(v, p, pose = 'stand') {
@@ -652,12 +707,15 @@ export function createSim({ save = null, readOnly = false } = {}) {
   const outItems = () => world.index.items.filter((p) => (p.y | 0) === 0 && !inside.has(ck(p.x, 0, p.z)));
   const within = (recs, cells, R) => recs.filter((p) => dist(p.x, p.z, cells) <= R);
   const dur = (v, key, tag) => { const [a, b] = TUNE.DUR[key]; const r = R(v, tag || key); return range(r, a, b) * (1 + (r() * 2 - 1) * TUNE.DUR_JITTER * 0.5); };
-  // ---- places held (§5.5, R3 T3.3, R4 T4.4): a villager holds one outdoor place at a time (v._spot, its key, and
-  // v._spotAt, its ground point), booked when the plan is made and again as the walk to it starts. A place is free
-  // when no other villager holds its key and no other villager holds a point within SPOT_GAP of it, so two keys that
-  // name one point (a doorstep, a seat's approach, a cell centre) can never put two villagers on it: two figures
-  // posed on one spot are drawn as one, with two hats
+  // ---- places held (§5.5, §6.5, R3 T3.3, R4 T4.4, R5 T5.1/T5.2): a villager holds one place at a time, outdoors or
+  // indoors (v._spot, its key; v._spotAt, its point; v._spotLie, the face of a lying body or null), booked when the
+  // plan is made and again as the step that uses it starts. A place is free when no other villager holds its key and
+  // no other villager's held body comes within SPOT_GAP of it (a standing or seated body is its point, a lying one the
+  // segment LIE_HALF either side of its centre along its face), so two keys that name one point (a doorstep, a seat's
+  // approach, a cell centre) can never put two villagers on it, and nobody is booked onto a sleeper: two figures posed
+  // on one spot are drawn as one, with two hats
   const SPOT_GAP = 0.45;                               // m; the nearest two seats of one piece are 0.6 m apart
+  const LIE_HALF = 0.55;                               // m; half a lying body, measured from its centre
   const spotPoint = (sp) => sp.ground || sp.at;
   /** The villager who holds a key; a stale entry (its holder gone, or holding another place now) is dropped. */
   function holderOf(key) {
@@ -668,33 +726,48 @@ export function createSim({ save = null, readOnly = false } = {}) {
     reserved.delete(key);
     return null;
   }
-  /** Is a place (key, ground point) free for v (null: for anyone)? */
-  function placeFree(key, at, v = null) {
+  /** Ground-plane gap between two held bodies: a point (lie null) or a lying body (lie = its face). */
+  function bodyGap(p, pl, q, ql) {
+    if (pl == null && ql == null) return Math.hypot(p[0] - q[0], p[2] - q[2]);
+    const seg = (c, f) => (f == null ? [c[0], c[2], c[0], c[2]] : [c[0] - Math.sin(f) * LIE_HALF, c[2] - Math.cos(f) * LIE_HALF, c[0] + Math.sin(f) * LIE_HALF, c[2] + Math.cos(f) * LIE_HALF]);
+    const A = seg(p, pl), Bs = seg(q, ql);
+    const ps = (x, z, s) => {
+      const dx = s[2] - s[0], dz = s[3] - s[1], L = dx * dx + dz * dz;
+      const t = L ? clamp(((x - s[0]) * dx + (z - s[1]) * dz) / L, 0, 1) : 0;
+      return Math.hypot(x - s[0] - t * dx, z - s[1] - t * dz);
+    };
+    return Math.min(ps(A[0], A[1], Bs), ps(A[2], A[3], Bs), ps(Bs[0], Bs[1], A), ps(Bs[2], Bs[3], A));
+  }
+  /** Is a place (key, point, lying face or null) free for v (null: for anyone)? */
+  function placeFree(key, at, v = null, lie = null) {
     const h = key ? holderOf(key) : null;
     if (h && h !== v) return false;
     if (!at) return true;
     for (const u of villagers) {
       const p = u._spotAt;
       if (u === v || !p || !u._spot) continue;
-      if (Math.abs(p[0] - at[0]) < SPOT_GAP && Math.abs(p[2] - at[2]) < SPOT_GAP && Math.abs((p[1] || 0) - (at[1] || 0)) < 1
-        && Math.hypot(p[0] - at[0], p[2] - at[2]) < SPOT_GAP) return false;
+      const ul = u._spotLie ?? null, reach = SPOT_GAP + (lie != null ? LIE_HALF : 0) + (ul != null ? LIE_HALF : 0);
+      if (Math.abs(p[0] - at[0]) < reach && Math.abs(p[2] - at[2]) < reach && Math.abs((p[1] || 0) - (at[1] || 0)) < 1
+        && bodyGap(at, lie, p, ul) < SPOT_GAP) return false;
     }
     return true;
   }
   /** v holds a place (and lets go of the one it held); false, changing nothing, when the place is not free. */
-  function hold(v, key, at) {
-    if (!placeFree(key, at, v)) return false;
+  function hold(v, key, at, lie = null) {
+    if (!placeFree(key, at, v, lie)) return false;
     if (v._spot && v._spot !== key && reserved.get(v._spot) === v.id) reserved.delete(v._spot);
-    reserved.set(key, v.id); v._spot = key; v._spotAt = at ? [at[0], at[1] || 0, at[2]] : null;
+    reserved.set(key, v.id); v._spot = key; v._spotAt = at ? [at[0], at[1] || 0, at[2]] : null; v._spotLie = at ? lie : null;
     return true;
   }
   function release(v) {
     if (v._spot && reserved.get(v._spot) === v.id) reserved.delete(v._spot);
-    v._spot = null; v._spotAt = null;
+    v._spot = null; v._spotAt = null; v._spotLie = null;
   }
   /** Book a pose step's place for v. A doorstep pose (`slot`: a doorUse) takes a free door slot now, and the step is
-   *  moved onto it; `slot0` keeps it to the stand point itself (sweeping). false: the place is taken. */
+   *  moved onto it; `slot0` keeps it to the stand point itself (sweeping). A lying pose holds its whole body. An indoor
+   *  step is claimInside's. false: the place is taken. */
   function claimPose(v, s) {
+    if (s.k === 'inside') return claimInside(v, s);
     if (s.slot && !s.spot) {
       const sl = doorSlot(v, s.slot, !!s.slot0);
       if (!sl) return false;
@@ -702,7 +775,58 @@ export function createSim({ save = null, readOnly = false } = {}) {
       return true;
     }
     if (!s.spot) return true;
-    return hold(v, s.spot, s.ground || s.at);
+    return hold(v, s.spot, s.ground || s.at, s.pose === 'lie' ? s.face : null);
+  }
+  /** Book an indoor step's place for v (R5 T5.1): its own place while it is still there and free, else a fresh free
+   *  place of the same kind in the same building (the step moves there). Its place is looked up in the world as it
+   *  stands now (R6 T6.2: the step may have been planned before the player furnished its floor cell, took its seat
+   *  away or set a table before its chair, which moves the chair's seat). Indoor steps always run: when nothing is
+   *  free (a bed whose body someone stands too near, a crammed home) the villager poses there holding nothing. */
+  function claimInside(v, s) {
+    if (!s.spot) return true;
+    const lie = (sp) => (sp.pose === 'sleep' ? sp.face : null);
+    const b = world && s.kind ? B(s.homeId) : null;
+    if (!b) {
+      if (hold(v, s.spot, s.at, lie(s))) return true;
+      release(v);
+      return false;
+    }
+    s.rec = liveRec(s.rec);
+    const now = insideSpot(v, b, s.kind, s.rec, s.spot);
+    if (now) {
+      Object.assign(s, { at: now.at, face: now.face, level: now.level, pose: now.pose });
+      if (hold(v, s.spot, s.at, lie(s))) return true;
+    }
+    const r = insideSpot(v, b, s.kind, s.rec);
+    if (r.spot && r.spot !== s.spot && hold(v, r.spot, r.at, lie(r))) {
+      Object.assign(s, { at: r.at, face: r.face, level: r.level, pose: r.pose, spot: r.spot });
+      return true;
+    }
+    // nothing free: pose holding nothing, at its own place while it is still there, else where insideSpot says
+    if (!now) Object.assign(s, { at: r.at, face: r.face, level: r.level, pose: r.pose, spot: r.spot });
+    release(v);
+    return false;
+  }
+  /** A record a step was planned for, as the world holds it now (the same piece in its cell), else null. */
+  function liveRec(rec) {
+    if (!rec || !world) return null;
+    const ix = world.index, k = ck(rec.x, rec.y | 0, rec.z), q = ix.I.get(k) || ix.D.get(k);
+    return q && q.t === rec.t ? q : null;
+  }
+  /** After a recompute (R6 T6.2): a villager posed indoors whose place is gone or has moved (its floor cell furnished,
+   *  its seat, bed or piece removed or turned, a table set before its chair) is booked again at once (claimInside: the
+   *  same place where it now is, else another free place of its kind) and the actor eases there. A place unchanged in
+   *  the world is left alone. So furnishing a home never leaves a housemate standing inside the new piece. */
+  function recheckInside(v, b) {
+    const p = v.plan;
+    if (!p || p.kind !== 'inside' || !p._kind || !p._spot || !b) return;
+    const rec = liveRec(p._rec);
+    const now = insideSpot(v, b, p._kind, rec, p._spot);
+    const off = (a) => Math.abs(a[0] - p.at[0]) > 0.02 || Math.abs(a[1] - p.at[1]) > 0.02 || Math.abs(a[2] - p.at[2]) > 0.02;
+    if (now && !off(now.at) && (now.level | 0) === (p.level | 0)) { p._rec = rec; return; }
+    const s = { k: 'inside', homeId: b.id, kind: p._kind, rec, spot: p._spot, at: p.at, face: p.face, level: p.level, pose: p.pose };
+    claimInside(v, s);
+    setPlan(v, { ...p, homeId: b.id, level: s.level | 0, at: s.at, face: s.face ?? 0, pose: s.pose === 'sleep' ? 'sleep' : s.pose === 'sit' ? 'sit' : 'stand', _rec: s.rec, _spot: s.spot || null });
   }
   const freeSpot = (s) => placeFree(s.id, spotPoint(s));
   const seatSpot = (v, spots) => spots.filter(freeSpot).sort((a, b) => dist(a.approach[0], a.approach[1], [v._cell || [0, 0]]) - dist(b.approach[0], b.approach[1], [v._cell || [0, 0]]) || (a.id < b.id ? -1 : 1))[0] || null;
@@ -746,11 +870,13 @@ export function createSim({ save = null, readOnly = false } = {}) {
   }
 
   /** Fill v._steps with the next activity, and book its first place at once (R4 T4.4): villagers who plan within one
-   *  exit window each see the places the others have just picked. A plan whose first pose names no place holds none. */
+   *  exit window each see the places the others have just picked. The first place is the first pose outdoors or the
+   *  first indoor step (R5 T5.1: housemates going home in the same second each get their own seat or stand). A plan
+   *  whose first pose names no place holds none. */
   function planActivity(v) {
     planInner(v);
-    const s = v._steps.find((x) => x.k === 'pose');
-    if (s && (s.spot || s.slot)) claimPose(v, s);       // taken (rare: every picker checks): the walk start drops it
+    const s = v._steps.find((x) => x.k === 'pose' || x.k === 'inside');
+    if (s && (s.spot || s.slot)) claimPose(v, s);       // taken (rare: every picker checks): the step start re-books it
     else release(v);
   }
   function planInner(v) {
@@ -1180,17 +1306,65 @@ export function createSim({ save = null, readOnly = false } = {}) {
     }
     v._steps = steps;
   }
+  /** A camper's place by its tent (§5.7, §6.5; R4 T4.4, R5 T5.2): tent-mates side by side across its mouth, 0.9 m
+   *  apart (lying with the head into the tent, sitting or waiting facing out). When the mouth cell is built over, the
+   *  same two places across the nearest free cell in sight of the tent, facing it; when both places there are taken,
+   *  the next free cell's. Held at once with hold() (a lying camper holds its whole body), so nobody else is booked
+   *  onto it, and two campers never share a point even when more campers than tents share CAMP_CELLS[0].
+   *  → { cell, ground, face, spot } or null (nothing free within 4 cells) */
+  function campPlace(v, t, pose) {
+    if (!world) return null;
+    const nav = world.nav, lie = pose === 'lie';
+    const k = Math.max(0, villagers.filter((u) => u.status === 'camping').indexOf(v)) % 2;
+    const tc = [(t[0] + 0.5) * CELL, (t[1] + 0.5) * CELL];
+    const cells = [];
+    for (let r = 1; r <= 4; r++) for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) {
+      if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+      const x = t[0] + dx, z = t[1] + dz;
+      if (nav.inMain(x, z)) cells.push([x, z]);
+    }
+    const mx = t[0] + 1, mz = t[1];
+    const d2 = (c) => (c[0] - mx) ** 2 + (c[1] - mz) ** 2;
+    // in sight of the tent first: no blocked cell (a shed, another tent) on the line from the tent to it
+    const hidden = (c) => {
+      for (let f = 0.25; f < 1; f += 0.25) {
+        const x = Math.floor(t[0] + 0.5 + (c[0] - t[0]) * f), z = Math.floor(t[1] + 0.5 + (c[1] - t[1]) * f);
+        if ((x !== t[0] || z !== t[1]) && nav.blocked[ci(x, z)]) return 1;
+      }
+      return 0;
+    };
+    const key = new Map(cells.map((c) => [c, hidden(c) * 1000 + d2(c)]));
+    cells.sort((p, q) => key.get(p) - key.get(q) || ci(p[0], p[1]) - ci(q[0], q[1]));
+    for (const c of cells) {
+      const mouth = c[0] === mx && c[1] === mz;
+      const cc = nav.centre(c[0], c[1]);
+      // out of the tent: +X at its own mouth, else from the tent's centre to this cell's
+      let ux = 1, uz = 0;
+      if (!mouth) { const L = Math.hypot(cc[0] - tc[0], cc[2] - tc[1]) || 1; ux = (cc[0] - tc[0]) / L; uz = (cc[2] - tc[1]) / L; }
+      const base = mouth ? [c[0] * CELL + (pose === 'stand' ? 0.6 : 0.3), cc[2]] : [cc[0], cc[2]];
+      for (const side of [k, 1 - k]) {
+        const sg = side ? 1 : -1;
+        const gx = base[0] - uz * 0.45 * sg, gz = base[1] + ux * 0.45 * sg;
+        const ground = [gx, surfaceAt(gx, gz), gz];
+        const out = Math.atan2(ux, uz), face = lie ? out + Math.PI : out;
+        const spot = `tent|${c[0]}|${c[1]}|${side}`;
+        if (hold(v, spot, ground, lie ? face : null)) return { cell: c, ground, face, spot };
+      }
+    }
+    return null;
+  }
   function campActivity(v, phase) {
     const t = tentOf(v);
-    let mouth = [t[0] + 1, t[1]];
-    if (!world.nav.inMain(mouth[0], mouth[1])) mouth = world.nav.nearestFree(mouth[0], mouth[1], 4, true) || world.nav.laneCell;
-    const at = world.nav.centre(mouth[0], mouth[1]);
     if (phase === 'night' || phase === 'home') {
       v._act = 'camp';
-      // two campers share a tent: side by side at its mouth
-      const k = villagers.filter((u) => u.status === 'camping').indexOf(v) % 2;
-      const ground = mouth[0] === t[0] + 1 && mouth[1] === t[1] ? [(t[0] + 1) * CELL + 0.3, 0, (t[1] + 0.5) * CELL + (k ? 0.45 : -0.45)] : at;
-      v._steps = [{ k: 'walk', to: mouth, end: ground }, { k: 'pose', pose: phase === 'night' ? 'lie' : 'sit', at: [ground[0], ground[1] + 0.05, ground[2]], face: phase === 'night' ? -Math.PI / 2 : Math.PI / 2, dur: phase === 'night' ? 40 : 30, cell: mouth, ground }];
+      const pose = phase === 'night' ? 'lie' : 'sit';
+      const pl = campPlace(v, t, pose);
+      if (pl) {
+        const g = pl.ground;
+        v._steps = [{ k: 'walk', to: pl.cell, end: g }, { k: 'pose', pose, at: [g[0], g[1] + 0.05, g[2]], face: pl.face, dur: phase === 'night' ? 40 : 30, cell: pl.cell, ground: g, spot: pl.spot }];
+        return;
+      }
+      v._steps = wanderSteps(v);
       return;
     }
     const W = activityWeights(v, phase).filter(([k]) => k !== 'work' && k !== 'popHome' && k !== 'mailbox' && k !== 'porch');
@@ -1199,10 +1373,9 @@ export function createSim({ save = null, readOnly = false } = {}) {
     const s = choice === 'chore' ? wanderSteps(v) : activitySteps(v, choice, phase);
     if (s.length) { v._steps = s; return; }
     // nothing to do: wait by the tent, beside a tent-mate rather than on them (two campers share a tent; R4 T4.4)
-    const k = villagers.filter((u) => u.status === 'camping').indexOf(v) % 2;
-    const by = mouth[0] === t[0] + 1 && mouth[1] === t[1] ? [(t[0] + 1) * CELL + 0.6, surfaceAt((t[0] + 1) * CELL + 0.6, (t[1] + 0.5) * CELL), (t[1] + 0.5) * CELL + (k ? 0.5 : -0.5)] : at;
-    const key = `tent|${t[0]}|${t[1]}|${k}`;
-    v._steps = [{ k: 'walk', to: mouth, end: by }, { k: 'pose', pose: 'stand', at: by, face: Math.PI / 2, dur: dur(v, 'wander'), cell: mouth, spot: placeFree(key, by, v) ? key : undefined }];
+    const pl = campPlace(v, t, 'stand');
+    if (pl) { v._steps = [{ k: 'walk', to: pl.cell, end: pl.ground }, { k: 'pose', pose: 'stand', at: pl.ground, face: pl.face, dur: dur(v, 'wander'), cell: pl.cell, spot: pl.spot }]; return; }
+    v._steps = wanderSteps(v);
   }
   /** Steps that use a granted piece (§5.3). */
   function useSteps(v, g) {
@@ -1594,9 +1767,9 @@ export function createSim({ save = null, readOnly = false } = {}) {
       { k: 'pose', pose: 'knock', at: du.stand, face: du.face, dur: TUNE.MOVEIN_ENTER, cell: du.step, cues: [{ kind: 'hop', first: 0, every: 99 }] },
       { k: 'door', dir: 'in', at: du.stand, face: du.face, homeId: b.id },
       { k: 'call', fn: () => { cue('pulse', { home: b.id }); cue('puff', { at: puffAt, n: 8, home: b.id }); cue('hearts', { at: [du.stand[0], 1.8, du.stand[2]], home: b.id }); } },
-      { k: 'inside', homeId: b.id, pose: 'stand', at: insideSpot(v, b, 'stand').at, face: 0, level: b.lo, dur: TUNE.MOVEIN_TOAST - TUNE.MOVEIN_LIGHTS },
+      insideStep(v, b, 'stand', TUNE.MOVEIN_TOAST - TUNE.MOVEIN_LIGHTS),
       { k: 'call', fn: (u) => joinRoster(u, b) },
-      { k: 'inside', homeId: b.id, pose: 'stand', at: insideSpot(v, b, 'stand').at, face: 0, level: b.lo, dur: TUNE.MOVEIN_OUT - TUNE.MOVEIN_TOAST },
+      insideStep(v, b, 'stand', TUNE.MOVEIN_OUT - TUNE.MOVEIN_TOAST),
       { k: 'call', fn: (u) => moveInOut(u, night) },
     ];
     // the 1.0 s beat (lights on) lands after knock (0.6) + door (0.4)
@@ -1946,7 +2119,7 @@ export function createSim({ save = null, readOnly = false } = {}) {
       for (const v of villagers) {
         if (v._loc !== 'in') continue;
         const b = buildingAt(v);
-        if (b) { v._inHome = b.id; continue; }
+        if (b) { v._inHome = b.id; recheckInside(v, b); continue; }
         const old = v.feet[0] ? unpackFoot(v.feet[0]) : [];
         const c = old.length ? world.nav.nearestFree(old[0][0], old[0][1], 6, true) : world.nav.nearestFree(0, 0, 11, true);
         endActivity(v); v._steps = [{ k: 'pose', pose: 'lookup', at: c ? world.nav.centre(c[0], c[1]) : [0, 0, 0], face: 0, dur: 4, cell: c || [0, 0] }];
@@ -2225,7 +2398,12 @@ export function createSim({ save = null, readOnly = false } = {}) {
       if (TRAITS[opts.trait]) t.trait = opts.trait;
       const target = [...homeInfo.values()].filter((i) => i.free > 0).sort((a, c) => (a.b.id < c.b.id ? -1 : 1))[0];
       const v = makeTravellerModel(t, target ? target.b : { id: null, foot: [] });
-      st.nextId++;
+      // never a pending traveller's id: it is 'v' + nextId and only takes nextId as it joins the roster, so a villager
+      // spawned while one is on the way got its id, and the two models shared one actor (R6 T6.4)
+      let n = st.nextId;
+      while (villagers.some((u) => u.id === 'v' + n) || (traveller && traveller.id === 'v' + n)) n++;
+      v.id = 'v' + n;
+      st.nextId = n + 1;
       st.stats.arrivals++;
       if (target) {
         const free = target.b.beds.slice(0, target.b.capacity).filter((k) => !villagers.some((u) => u.bed === k));

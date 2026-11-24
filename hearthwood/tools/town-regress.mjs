@@ -4,7 +4,8 @@
 //   --batch   also runs tools/batch-regress.mjs twice (R13: town=0 and HW_TOWN=1; about 15 minutes more)
 //   --only=a,b   run only these sections (params, spine, off, settings, crash, importfail, autosave, parts, offline,
 //                blueprints, homes, arrival, evict, stuck, budget, determinism, passerby, showme, gifts, share, photo,
-//                villageoff, guided, persist, taps, migration, twotabs, watch, repair1, repair2, repair3, repair4, feel)
+//                villageoff, guided, persist, taps, migration, twotabs, watch, repair1, repair2, repair3, repair4, repair5,
+//                repair6, feel)
 // M0: the spine — boot / ready / restore recompute (R1), the TownAPI and debug shape, params, enabled(), clocks,
 // recompute scheduling, rig pass-through, failure isolation, an import failure (R5's last case), the core edits
 // (state keys, env exports, catalog.setHidden, the autosave guard) and R13.
@@ -20,7 +21,12 @@
 // farmhouse, a Show me swap spot wins over a villager on it, the checklist chip never over a bubble, housemates never on
 // one lunch spot, thank-yous that differ) and `repair4` (T4.x: an off-screen wisher's edge bubble never under the
 // checklist chip, wish bubbles never culled while their villager is on screen, no two villagers posed on one spot, and
-// the drawn backstop); R11 also shows every feasible wish with Show me (the ghost is one mesh,
+// the drawn backstop) and `repair5` (T5.x: housemates indoors each in a place of their own, never on a bed; campers of a
+// built-over tent mouth side by side; the backstop for lying and indoor bodies; a generic overlap audit of full town
+// days on six layouts; the 20-villager tick judged on the fastest batch) and `repair6` (T6.x: a sitter in a dining
+// chair on its drawn seat, tucked up to the table; furnishing a home, or taking a seat away, never leaves a housemate
+// inside the new piece or in mid-air; housemates' edge bubbles merge into one ×2; debug.spawn never reuses a pending
+// traveller's id); R11 also shows every feasible wish with Show me (the ghost is one mesh,
 // T2.4), and judges its wall-clock budgets on the fastest of several batches (T2.5, T3.7).
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
@@ -2191,6 +2197,661 @@ await section('repair4', async () => {
   await p3.ctx.close();
   await p2.ctx.close();
   await ctx.close();
+});
+
+// ---------------------------------------------------------------- repair round 5 (T5.x): indoors and at the camp, one place each
+await section('repair5', async () => {
+  const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+  const tapOf = async (ctx, page) => {
+    const cdp = await ctx.newCDPSession(page);
+    const touch = (type, pts) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: pts.map((p, i) => ({ x: p[0], y: p[1], id: i, radiusX: 4, radiusY: 4, force: 1 })) });
+    return async (p) => { await touch('touchStart', [p]); await wait(60); await touch('touchEnd', []); await wait(1200); };
+  };
+  // in the page: every posed villager (an outdoor pose or an indoor step; the traveller and the passer-by too) as a
+  // body: a point (standing, sitting) or, lying, the segment 0.5 m either side of its centre along its face. Pairs on
+  // one storey nearer than R. The only intentional near pair would be two chatting face to face at their chat distance
+  // (≥ 1 m today), so it is let through only when both chat, face each other and are > 0.15 m apart
+  const PAGE = String.raw`window.__r5 = {
+    body(v) {
+      const p = v && v.plan;
+      if (!p || (p.kind !== 'pose' && p.kind !== 'inside')) return null;
+      const at = p.kind === 'pose' ? (p.ground || p.at) : p.at, f = Number.isFinite(p.face) ? p.face : 0;
+      const lie = p.kind === 'inside' ? p.pose === 'sleep' : p.pose === 'lie';
+      const c = [p.at[0], p.at[2]], h = lie ? 0.5 : 0;
+      return { id: v.id, name: v.name, act: v._act, pose: p.pose, kind: p.kind, lv: p.kind === 'inside' ? (p.level | 0) : 0, y: at[1], lie, f, spot: v._spot,
+        a: lie ? [c[0] - Math.sin(f) * h, c[1] - Math.cos(f) * h] : [at[0], at[2]], b: lie ? [c[0] + Math.sin(f) * h, c[1] + Math.cos(f) * h] : [at[0], at[2]] };
+    },
+    segd(p, a, b) { const dx = b[0] - a[0], dz = b[1] - a[1], L = dx * dx + dz * dz; const t = L ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / L)) : 0; return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dz); },
+    dist(A, B) { return Math.min(this.segd(A.a, B.a, B.b), this.segd(A.b, B.a, B.b), this.segd(B.a, A.a, A.b), this.segd(B.b, A.a, A.b)); },
+    intentional(A, B, d) {
+      const faces = (P, Q) => Math.cos(P.f - Math.atan2(Q.a[0] - P.a[0], Q.a[1] - P.a[1])) > 0.7;
+      return A.pose === 'chat' && B.pose === 'chat' && d > 0.15 && faces(A, B) && faces(B, A);
+    },
+    scan(R = 0.3) {
+      const D = __hw.town.debug, out = [];
+      const bs = [...D.sim.villagers, D.sim.traveller, D.sim.passerby].map((v) => this.body(v)).filter(Boolean);
+      for (let i = 0; i < bs.length; i++) for (let j = i + 1; j < bs.length; j++) {
+        const A = bs[i], B = bs[j];
+        const storey = A.kind === 'inside' && B.kind === 'inside' ? A.lv === B.lv : Math.abs(A.y - B.y) <= 1.2;
+        if (!storey) continue;
+        const d = this.dist(A, B);
+        if (d < R && !this.intentional(A, B, d)) out.push({ d: +d.toFixed(3), A, B });
+      }
+      return out;
+    },
+    /** n ticks of flowing time; pairs nearer than 0.3 m by kind, the first few, and how many indoor / camp bodies were seen. */
+    run(n) {
+      const D = __hw.town.debug, out = { n: 0, kinds: {}, ex: [], inside: 0, camp: 0, lie: 0 };
+      for (let k = 0; k < n; k++) {
+        D.step(1);
+        for (const v of D.sim.villagers) { const p = v.plan; if (p?.kind === 'inside') out.inside++; if (v._act === 'camp' && p?.kind === 'pose') out.camp++; if (p && (p.pose === 'lie' || (p.kind === 'inside' && p.pose === 'sleep'))) out.lie++; }
+        for (const { d, A, B } of this.scan(0.3)) {
+          out.n++;
+          const key = [A.kind + ':' + A.act + ':' + A.pose, B.kind + ':' + B.act + ':' + B.pose].sort().join(' + ');
+          out.kinds[key] = (out.kinds[key] || 0) + 1;
+          if (out.ex.length < 3) out.ex.push({ h: +(__hw.state.time * 24).toFixed(2), d, A: [A.name, A.pose, A.spot, A.a.map((x) => +x.toFixed(2))], B: [B.name, B.pose, B.spot, B.a.map((x) => +x.toFixed(2))] });
+        }
+      }
+      return out;
+    },
+    /** The bounding box of the actors' drawn bodies of two villagers: their drawn gap (a lying one as its segment). */
+    drawnGap(a, b) {
+      const D = __hw.town.debug, A = D.actors.actor(a), B = D.actors.actor(b);
+      const pa = D.actors.positionOf(a), pb = D.actors.positionOf(b);
+      const seg = (act, p) => act.tg.lie ? [[p.x - Math.sin(act.tg.yaw) * 0.5, p.z - Math.cos(act.tg.yaw) * 0.5], [p.x + Math.sin(act.tg.yaw) * 0.5, p.z + Math.cos(act.tg.yaw) * 0.5]] : [[p.x, p.z], [p.x, p.z]];
+      const [a0, a1] = seg(A, pa), [b0, b1] = seg(B, pb);
+      const d = Math.min(this.segd(a0, b0, b1), this.segd(a1, b0, b1), this.segd(b0, a0, a1), this.segd(b1, a0, a1));
+      return { d: +d.toFixed(3), visible: pa.visible && pb.visible, lieA: !!A.tg.lie, lieB: !!B.tg.lie };
+    },
+  };`;
+  const SHED = (x, z0) => `await D.edit((w) => {
+      for (const z of [${z0}, ${z0 + 1}]) { w.add({ t: 'foundation', x: ${x}, y: 0, z }, { record: false }); w.add({ t: 'roof_flat', x: ${x}, y: 1, z, h: 0 }, { record: false }); }
+      w.add({ t: 'wall_door', a: 'z', x: ${x}, y: 0, z: ${z0} }, { record: false }); w.add({ t: 'wall', a: 'z', x: ${x}, y: 0, z: ${z0 + 1} }, { record: false });
+      w.add({ t: 'wall', a: 'z', x: ${x + 1}, y: 0, z: ${z0} }, { record: false }); w.add({ t: 'wall', a: 'z', x: ${x + 1}, y: 0, z: ${z0 + 1} }, { record: false });
+      w.add({ t: 'wall', a: 'x', x: ${x}, y: 0, z: ${z0} }, { record: false }); w.add({ t: 'wall', a: 'x', x: ${x}, y: 0, z: ${z0 + 2} }, { record: false });
+    });`;
+  const allProblems = [];
+
+  // -- T5.1 (a), iPhone 13: the cottage with a second bed, the Gardener and the Baker home for the evening (the
+  // verifiers' repro, seed 8: on HEAD both sat in the one armchair at 21:49 for ≈ 100 ticks); then a real tap on the
+  // rail's eye switches to the cutaway, where the two are drawn apart
+  {
+    const { ctx, page, problems } = await game('bp=cottage&nosave=1&town=fresh&townseed=8', { mobile: true });
+    await page.addScriptTag({ content: PAGE });
+    const tap = await tapOf(ctx, page);
+    const r = await page.evaluate(async () => {
+      const hw = __hw, D = hw.town.debug;
+      await __t.sleep(2000);
+      const bed = hw.world.add({ t: 'bed', x: 2, y: 0, z: 1, r: 0, m: 'wood' });
+      await __t.sleep(500);
+      D.spawn('gardener'); D.spawn('baker');
+      hw.state.set({ timeFlow: true, time: 0.74 });
+      window.__r5a = { bed: !!bed, homes: D.homes().map((h) => h.capacity + ':' + h.residents.length), n: 0, ex: [], bothSit: 0, seats: new Set(), k: 0 };
+      const out = window.__r5a;
+      // up to the first moment both sit at home after 21:30 (on HEAD: 21:49, both in the one armchair)
+      for (; out.k < 1600; out.k++) {
+        D.step(1);
+        const ps = __r5.scan(0.3);
+        out.n += ps.length;
+        if (ps.length && out.ex.length < 2) out.ex.push(ps.map((p) => [p.d, p.A.name, p.A.pose, p.B.name, p.B.pose]));
+        const ins = D.sim.villagers.filter((v) => v.plan?.kind === 'inside');
+        if (ins.length === 2 && ins.every((v) => v.plan.pose === 'sit')) { out.bothSit++; for (const v of ins) out.seats.add(v._spot); if (out.k > 380) break; }
+      }
+      hw.state.set({ timeFlow: false });
+      out.h = +(hw.state.time * 24).toFixed(2);
+      return { h: out.h, seats: [...out.seats] };
+    });
+    // the rail's eye: 'All' → 'Cutaway' with a real tap
+    const eye = await page.evaluate(() => { const b = document.querySelector('.hw-rail .hw-see'); if (!b || !(b.getBoundingClientRect().width > 0)) return null; const q = b.getBoundingClientRect(); return [q.left + q.width / 2, q.top + q.height / 2]; });
+    if (eye) await tap(eye);
+    const dr = await page.evaluate(async () => {
+      const hw = __hw, D = hw.town.debug;
+      hw.rig.setView({ t: [1, 0.6, 0], th: 0.6, ph: 0.75, r: 11 }, true);
+      await __t.sleep(1500);
+      const [a, b] = D.sim.villagers.map((v) => v.id);
+      return { seeAll: hw.state.seeAll, label: document.querySelector('.hw-rail .hw-see')?.textContent.trim(), ...__r5.drawnGap(a, b) };
+    });
+    // the rest of the evening, the night and the next morning
+    Object.assign(r, await page.evaluate(() => {
+      const hw = __hw, D = hw.town.debug, out = window.__r5a;
+      hw.state.set({ timeFlow: true });
+      for (; out.k < 1600; out.k++) {
+        D.step(1);
+        const ps = __r5.scan(0.3);
+        out.n += ps.length;
+        if (ps.length && out.ex.length < 2) out.ex.push(ps.map((p) => [p.d, p.A.name, p.A.pose, p.B.name, p.B.pose]));
+        const ins = D.sim.villagers.filter((v) => v.plan?.kind === 'inside');
+        if (ins.length === 2 && ins.every((v) => v.plan.pose === 'sit')) { out.bothSit++; for (const v of ins) out.seats.add(v._spot); }
+      }
+      return { ...out, seats: [...out.seats] };
+    }));
+    check('T5.1', 'the cottage with a second bed, a flowing evening (seed 8): the two housemates sit at home together, each in a seat of their own (on HEAD both in the one armchair), and no two bodies indoors or out come within 0.3 m',
+      r.bed && r.bothSit > 0 && r.seats.length >= 2 && r.n === 0, r);
+    check('T5.1', 'a real tap on the rail\'s eye opens the cutaway while both sit at home: the two housemates are drawn apart (> 1 m) and both visible',
+      !!eye && dr.seeAll === false && dr.visible && dr.d > 1, { eye: !!eye, ...dr });
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+  // -- T5.1 (b): the 2-bed flat-roofed hut (the camp plan's shape), seed 4: one asleep, the other up indoors. On HEAD the
+  // one up stood at the hut's centre cell, the sleeper's bed. Indoor stands are never on a cell with a bed or furniture
+  {
+    const { ctx, page, problems } = await game('clean=1&nosave=1&town=fresh&townseed=4', { mobile: true });
+    await page.addScriptTag({ content: PAGE });
+    const r = await page.evaluate(async () => {
+      const hw = __hw, D = hw.town.debug;
+      await __t.sleep(1500);
+      await D.edit((w) => { for (const p of __fx.SMALL_HOME(0, 0)) w.add(p, { record: false }); w.add({ t: 'bed', x: 1, y: 0, z: 0 }, { record: false }); });
+      D.spawn('gardener'); D.spawn('beekeeper');
+      hw.state.set({ timeFlow: true, time: 0.72 });
+      const ix = D.model.index, out = { n: 0, ex: [], upWithSleeper: 0, onFurniture: [], stands: new Set() };
+      for (let k = 0; k < 1500; k++) {
+        D.step(1);
+        const ps = __r5.scan(0.3);
+        out.n += ps.length;
+        if (ps.length && out.ex.length < 2) out.ex.push(ps.map((p) => [p.d, p.A.name, p.A.pose, p.A.a, p.B.name, p.B.pose, p.B.a]));
+        const ins = D.sim.villagers.filter((v) => v.plan?.kind === 'inside');
+        for (const v of ins) {
+          if (v.plan.pose === 'sleep') continue;
+          const x = Math.floor(v.plan.at[0] / 2), z = Math.floor(v.plan.at[2] / 2);
+          out.stands.add(v.plan.pose + '@' + x + ',' + z);
+          if (v.plan.pose === 'stand' && ix.I.has(x + '|' + (v.plan.level | 0) + '|' + z)) out.onFurniture.push([v.name, x, z]);
+        }
+        if (ins.length === 2 && ins.some((v) => v.plan.pose === 'sleep') && ins.some((v) => v.plan.pose !== 'sleep')) out.upWithSleeper++;
+      }
+      hw.state.set({ timeFlow: false });
+      out.stands = [...out.stands];
+      return out;
+    });
+    check('T5.1', 'the 2-bed hut through an evening and night (seed 4): one housemate up indoors while the other sleeps, never standing on a bed or furniture cell, and no two bodies within 0.3 m (on HEAD: 111 sleep+stand pair-ticks on the bed)',
+      r.upWithSleeper > 0 && r.onFurniture.length === 0 && r.n === 0, r);
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+  // -- T5.2: 20 campers in 10 tents, a bed-less shed built at x = −10 over the mouths of the tents at z 4 and 5 (the
+  // verifiers' t44camp repro): at night and in the evening every camper has a place of their own, tent-mates side by side
+  {
+    const { ctx, page, problems } = await game('clean=1&nosave=1&town=fresh&townseed=5&spawn=20', { mobile: true });
+    await page.addScriptTag({ content: PAGE });
+    const r = await page.evaluate(new Function(`return (async () => {
+      const hw = __hw, D = hw.town.debug;
+      await __t.sleep(2500);
+      ${SHED(-10, 4)}
+      const out = [];
+      for (const tm of [0.95, 0.925]) {                   // 22:48 asleep, 22:12 at home (sitting): the home phase starts ≈ 21:30
+        hw.state.set({ timeFlow: false, time: tm });
+        D.advance(60);
+        const ps = __r5.scan(0.3);
+        const camp = D.sim.villagers.filter((v) => v._act === 'camp' && v.plan?.kind === 'pose');
+        const spots = camp.map((v) => v._spot);
+        // the tent at z 4: its mates' places (its mouth (−10, 4) is under the shed)
+        const k = D.sim.villagers.filter((v) => v.status === 'camping');
+        const mates = [k[8], k[9]].filter((v) => v && v.plan?.kind === 'pose').map((v) => (v.plan.ground || v.plan.at).map((x) => +x.toFixed(2)));
+        out.push({ tm, tents: D.state().tents.length, campers: k.length, posed: camp.length, held: spots.filter(Boolean).length, unique: new Set(spots).size, n: ps.length,
+          ex: ps.slice(0, 2).map((p) => [p.d, p.A.name, p.A.pose, p.A.spot, p.B.name, p.B.pose, p.B.spot]), mates, matesGap: mates.length === 2 ? +Math.hypot(mates[0][0] - mates[1][0], mates[0][2] - mates[1][2]).toFixed(2) : null });
+      }
+      // drawn: the actors keep every pair of camp bodies apart too
+      hw.rig.setView({ t: [-19, 0.5, 9], th: -1.3, ph: 0.8, r: 12 }, true);
+      await __t.sleep(1500);
+      const ids = D.sim.villagers.filter((v) => v._act === 'camp' && v.plan?.kind === 'pose').map((v) => v.id);
+      let drawnMin = Infinity;
+      for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) { const g = __r5.drawnGap(ids[i], ids[j]); if (g.visible) drawnMin = Math.min(drawnMin, g.d); }
+      return { out, drawnMin: +drawnMin.toFixed(3) };
+    })()`));
+    check('T5.2', 'a shed built over two tent mouths, 20 campers at night (lying) and in the evening (sitting): every camper holds a place of their own, the tent-mates of a built-over mouth ≥ 0.9 m apart, no two bodies within 0.3 m (on HEAD a lie + sit and a sit + sit pair on one point), and the drawn bodies too',
+      r.out.every((o) => o.campers === 20 && o.posed >= 12 && o.held === o.posed && o.unique === o.posed && o.n === 0 && (o.matesGap === null || o.matesGap >= 0.89)) && r.out.some((o) => o.matesGap !== null) && r.drawnMin >= 0.3, r);
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+  // -- the drawn backstop, extended (T5.1 / T5.2): a villager posed sitting on a lying camper's body, and two posed
+  // indoors on one point, places unbooked (the _steps trick): drawn off the sleeper (≥ 0.4 m from its body), apart (≥
+  // 0.4 m) indoors; the sleeper is never moved
+  const POSE = String.raw`window.__r5pose = (id, step) => {
+    const D = __hw.town.debug, v = D.sim.villagers.find((u) => u.id === id);
+    v._steps = [step]; v.plan = { ...v.plan, t1: __hw.town.clock() }; D.step(2);
+    return v.plan.kind + ':' + v.plan.pose;
+  };`;
+  {
+    const { ctx, page, problems } = await game('clean=1&nosave=1&town=fresh&spawn=gardener,beekeeper&time=0.42', { mobile: true });
+    await page.addScriptTag({ content: PAGE });
+    await page.addScriptTag({ content: POSE });
+    const r = await page.evaluate(async () => {
+      const hw = __hw, D = hw.town.debug, nav = D.model.nav;
+      hw.state.set({ timeFlow: false, time: 0.42 });
+      const [a, b] = D.sim.villagers.map((v) => v.id);
+      const P = [1, nav.surfaceAt(1, 1), 1];
+      const pa = __r5pose(a, { k: 'pose', pose: 'lie', at: P, face: -Math.PI / 2, dur: Infinity, cell: nav.cellOf(1, 1) });
+      const pb = __r5pose(b, { k: 'pose', pose: 'sit', at: [1.3, P[1], 1], face: Math.PI / 2, dur: Infinity, cell: nav.cellOf(1, 1) });
+      hw.rig.setView({ t: [1, 0.5, 1], th: 0.6, ph: 0.8, r: 8 }, true);
+      let g = null;
+      for (let i = 0; i < 40; i++) { await __t.sleep(200); g = __r5.drawnGap(a, b); if (g.d >= 0.4) break; }
+      const lier = D.actors.positionOf(a);
+      return { plans: [pa, pb], ...g, lierMoved: +Math.hypot(lier.x - 1, lier.z - 1).toFixed(3) };
+    });
+    check('T5.2', 'the drawn backstop: a villager posed (unbooked) sitting on a lying camper is drawn off the body (≥ 0.4 m from it), and the sleeper stays put',
+      r.plans.join() === 'pose:lie,pose:sit' && r.lieA && r.visible && r.d >= 0.4 && r.lierMoved < 0.05, r);
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+  {
+    const { ctx, page, problems } = await game('bp=cottage&nosave=1&town=fresh&spawn=gardener,beekeeper&time=0.42&townseed=2', { mobile: true });
+    await page.addScriptTag({ content: PAGE });
+    await page.addScriptTag({ content: POSE });
+    const r = await page.evaluate(async () => {
+      const hw = __hw, D = hw.town.debug;
+      hw.state.set({ timeFlow: false, time: 0.42, seeAll: false, level: 0 });
+      await __t.sleep(1000);
+      const hid = D.homes()[0]?.id || null;
+      const [a, b] = D.sim.villagers.map((v) => v.id);
+      const Q = [1, 0.25, 1];                          // the middle of the cottage's free cell (0, 0)
+      const plans = [a, b].map((id) => __r5pose(id, { k: 'inside', homeId: hid, pose: 'stand', at: Q, face: 0, level: 0, dur: Infinity }));
+      hw.rig.setView({ t: [1, 0.6, 0], th: 0.6, ph: 0.8, r: 8 }, true);
+      let g = null;
+      for (let i = 0; i < 40; i++) { await __t.sleep(200); g = __r5.drawnGap(a, b); if (g.d >= 0.4) break; }
+      return { home: hid, plans, ...g };
+    });
+    check('T5.1', 'the drawn backstop indoors: two villagers posed (unbooked) on one point of the cottage\'s floor are drawn ≥ 0.4 m apart in the cutaway',
+      !!r.home && r.plans.join() === 'inside:stand,inside:stand' && r.visible && r.d >= 0.4, r);
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+  // -- the generic overlap audit: full flowing town days (2400 ticks from 07:12) on varied layouts. No two villagers
+  // (the traveller and the passer-by included) posed within 0.3 m of each other, standing, sitting or lying, indoors
+  // or out, at any tick. On HEAD: farmhouse 295, cottage 743, hut 143, crammed hut 585, built-over camp 2208 pair-ticks
+  const LAYOUTS = {
+    'farmhouse + 4 huts, 12 villagers': ['bp=farmhouse&nosave=1&town=fresh&townseed=7', `
+      const hut = (x0, z0) => [...__fx.SMALL_HOME(x0, z0), { t: 'bed', x: x0 + 1, y: 0, z: z0 }];
+      await D.edit((w) => { for (const p of [...hut(4, 5), ...hut(-9, 5), ...hut(-9, -9), ...hut(4, -9)]) w.add(p, { record: false }); });
+      for (const j of ['gardener', 'beekeeper', 'baker', 'fisher', 'postie', 'lamplighter', 'farmer', 'gardener', 'woodcutter', 'baker', 'farmer', 'postie']) D.spawn(j);`],
+    'cottage, no seat, 4 housemates': ['bp=cottage&nosave=1&town=fresh&townseed=11', `
+      await D.edit((w) => {
+        for (const e of [...w.entries.values()]) if (['chair', 'armchair', 'sofa', 'rocking_chair'].includes(e.p.t)) w.remove(e.key, { record: false });
+        for (const [x, z] of [[1, -1], [-2, 0], [0, 1]]) w.add({ t: 'bed', x, y: 0, z, r: 0 }, { record: false });
+      });
+      for (const j of ['gardener', 'baker', 'postie', 'farmer']) D.spawn(j);`],
+    'cottage, no seat, 2 housemates': ['bp=cottage&nosave=1&town=fresh&townseed=3', `
+      await D.edit((w) => {
+        for (const e of [...w.entries.values()]) if (['chair', 'armchair', 'sofa', 'rocking_chair'].includes(e.p.t)) w.remove(e.key, { record: false });
+        w.add({ t: 'bed', x: 1, y: 0, z: -1, r: 0 }, { record: false });
+      });
+      for (const j of ['fisher', 'beekeeper']) D.spawn(j);`],
+    'a hut of four beds, 4 housemates': ['clean=1&nosave=1&town=fresh&townseed=6', `
+      await D.edit((w) => { for (const p of __fx.SMALL_HOME(0, 0)) w.add(p, { record: false }); for (const [x, z] of [[1, 0], [0, 1], [1, 1]]) w.add({ t: 'bed', x, y: 0, z, r: 0 }, { record: false }); });
+      for (const j of ['gardener', 'beekeeper', 'fisher', 'postie']) D.spawn(j);`],
+    'an empty lot, 6 campers': ['clean=1&nosave=1&town=fresh&townseed=9&spawn=6', ''],
+    'a camp, two mouths built over, 8 campers': ['clean=1&nosave=1&town=fresh&townseed=5&spawn=8', SHED(-10, 1)],
+  };
+  const audit = {};
+  for (const [name, [q, setup]] of Object.entries(LAYOUTS)) {
+    const { ctx, page, problems } = await game(q, { mobile: true });
+    await page.addScriptTag({ content: PAGE });
+    audit[name] = await page.evaluate(new Function(`return (async () => {
+      const hw = __hw, D = hw.town.debug;
+      await __t.sleep(1500);
+      ${setup}
+      hw.state.set({ timeFlow: true, time: 0.3 });
+      const r = __r5.run(2400);
+      r.roster = D.state().roster.map((v) => v.status[0]).join('');
+      r.stuck = D.stuck().length;
+      return r;
+    })()`));
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+  const rows = Object.entries(audit);
+  check('T5.x', 'the overlap audit: a full flowing day on each of 6 layouts (farmhouse + huts with 12 villagers, a seatless cottage with 2 and with 4 housemates, a hut of four beds, an empty lot with 6 campers, a camp with two mouths built over), no two villagers posed within 0.3 m (standing, sitting or lying, indoors or out) at any tick, nobody stuck',
+    rows.every(([, r]) => r.n === 0 && r.stuck === 0), Object.fromEntries(rows.map(([k, r]) => [k, r.n ? { n: r.n, kinds: r.kinds, ex: r.ex } : `0 (indoor ${r.inside}, camp ${r.camp}, lying ${r.lie} body-ticks; ${r.roster})`])));
+  check('T5.x', 'the audit saw the cases it guards: housemates indoors, sleepers, campers lying and sitting at a built-over camp',
+    rows.every(([k, r]) => (/camp/.test(k) ? r.camp > 1000 : r.inside > 1000) && r.lie > 500), Object.fromEntries(rows.map(([k, r]) => [k, [r.inside, r.camp, r.lie]])));
+
+  // -- T5.3: the 20-villager tick on PERF_TOWN in the game, judged like town-brain's B9 (the fastest of five 120 s
+  // batches; the budget, 0.1 ms, unchanged), and town-brain's B9 itself judges its tick that way
+  {
+    const { ctx, page, problems } = await game('clean=1&nosave=1&town=fresh&townseed=21', { mobile: true });
+    const r = await page.evaluate(async () => {
+      const hw = __hw, D = hw.town.debug;
+      await D.edit((w) => { for (const p of __fx.PERF_TOWN()) w.add(p, { record: false }); });
+      const jobs = ['gardener', 'farmer', 'woodcutter', 'fisher', 'beekeeper', 'baker', 'lamplighter', 'postie'];
+      for (let k = 0; k < 20; k++) D.spawn(jobs[k % 8]);
+      hw.state.set({ timeFlow: false, time: 0.42 });
+      D.advance(60);
+      const tb = [];
+      for (let b = 0; b < 5; b++) { D.sim.debug.resetStats(); D.advance(120); tb.push(D.sim.debug.stats().tickMs); }
+      const ts = tb.slice().sort((a, b) => a - b);
+      return { villagers: D.sim.villagers.length, fastest: +ts[0].toFixed(4), median: +ts[2].toFixed(4), batches: tb.map((x) => +x.toFixed(4)) };
+    });
+    const src = (await import('node:fs')).readFileSync(path.join(ROOT, 'tools', 'town-brain.js'), 'utf8');
+    const b9 = src.slice(src.indexOf('// tick with 20 villagers'), src.indexOf('report.B9 = out;'));
+    check('T5.3', 'the 20-villager tick ≤ 0.1 ms on the fastest of five 120 s batches (median reported), and town-brain B9 judges its tick the same way (no single sample)',
+      r.villagers === 20 && r.fastest <= 0.1 && /for \(let b = 0; b < 5; b\+\+\)/.test(b9) && /tick20Batches/.test(b9) && /ts\[0\]/.test(b9), r);
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+  check('T5.x', 'no console errors (repair5)', allProblems.length === 0, allProblems.slice(0, 4));
+});
+
+// ---------------------------------------------------------------- repair round 6 (T6.x): a sitter in a dining chair sits
+// on its drawn seat; furnishing a home never leaves a housemate inside the new piece; edge bubbles of housemates merge
+// into one ×2; debug.spawn while a traveller is on the way never reuses its id
+await section('repair6', async () => {
+  const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+  const touchOf = async (ctx, page) => {
+    const cdp = await ctx.newCDPSession(page);
+    const touch = (type, pts) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: pts.map((p, i) => ({ x: p[0], y: p[1], id: i, radiusX: 4, radiusY: 4, force: 1 })) });
+    const tap = async (p) => { await touch('touchStart', [p]); await wait(60); await touch('touchEnd', []); await wait(1200); };
+    const slide2 = async (x0, y0, dx, dy) => {         // two fingers side by side slide together: a pan
+      const pts = (t) => [[x0 - 45 + dx * t, y0 + dy * t], [x0 + 45 + dx * t, y0 + dy * t]];
+      await touch('touchStart', pts(0));
+      for (let i = 1; i <= 12; i++) { await wait(40); await touch('touchMove', pts(i / 12)); }
+      await touch('touchEnd', []); await wait(1200);
+    };
+    return { tap, slide2 };
+  };
+  const eyeOf = (page) => page.evaluate(() => { const b = document.querySelector('.hw-rail .hw-see'); if (!b || !(b.getBoundingClientRect().width > 0)) return null; const q = b.getBoundingClientRect(); return [q.left + q.width / 2, q.top + q.height / 2]; });
+  // in the page: a seated villager against the drawn seat of their chair (the centre of the chair's drawn box: the
+  // ladder-back's legs, seat and back are centred on its seat), and every pair of posed bodies nearer than 0.3 m
+  const PAGE = String.raw`window.__r6 = {
+    chairOf(spot) {
+      const [, t, x, y, z] = String(spot).split('|');
+      return [...__hw.world.entries.values()].find((e) => e.p.t === t && e.p.x === +x && e.p.y === +y && e.p.z === +z) || null;
+    },
+    seat(id) {
+      const hw = __hw, D = hw.town.debug, THREE = hw.THREE, v = D.sim.villagers.find((u) => u.id === id);
+      const e = v && /^seat\|chair\|/.test(v._spot || '') ? this.chairOf(v._spot) : null;
+      if (!e) return { spot: v && v._spot, plan: v && v.plan.kind + ':' + v.plan.pose };
+      const c = new THREE.Box3().setFromObject(e.obj).getCenter(new THREE.Vector3()), q = D.actors.positionOf(id);
+      return { name: v.name, spot: v._spot, plan: v.plan.kind + ':' + v.plan.pose, r: e.p.r, chair: [+c.x.toFixed(2), +c.z.toFixed(2)], at: [+v.plan.at[0].toFixed(2), +v.plan.at[2].toFixed(2)],
+        drawn: [+q.x.toFixed(2), +q.z.toFixed(2)], visible: q.visible, planGap: +Math.hypot(v.plan.at[0] - c.x, v.plan.at[2] - c.z).toFixed(3), gap: +Math.hypot(q.x - c.x, q.z - c.z).toFixed(3) };
+    },
+    /** Flowing town ticks until a villager sits in a dining chair with > 30 s of the sit left. */
+    toChair(n) {
+      const D = __hw.town.debug;
+      for (let k = 0; k < n; k++) {
+        D.step(1);
+        const v = D.sim.villagers.find((u) => u.plan?.kind === 'inside' && /^seat\|chair\|/.test(u._spot || '') && u.plan.t1 - D.state().clock > 30);
+        if (v) return { k, id: v.id, h: +(__hw.state.time * 24).toFixed(2) };
+      }
+      return null;
+    },
+    near(R = 0.3) {
+      const D = __hw.town.debug, out = [];
+      const body = (v) => { const p = v.plan; if (!p || (p.kind !== 'pose' && p.kind !== 'inside')) return null; const a = p.kind === 'pose' ? (p.ground || p.at) : p.at; return { n: v.name, lv: p.kind === 'inside' ? p.level | 0 : 0, y: a[1], x: a[0], z: a[2], lie: p.pose === 'sleep' || p.pose === 'lie' }; };
+      const bs = D.sim.villagers.map(body).filter((b) => b && !b.lie);
+      for (let i = 0; i < bs.length; i++) for (let j = i + 1; j < bs.length; j++) if (Math.abs(bs[i].y - bs[j].y) < 1.2 && Math.hypot(bs[i].x - bs[j].x, bs[i].z - bs[j].z) < R) out.push([bs[i].n, bs[j].n]);
+      return out;
+    },
+  };`;
+  const allProblems = [];
+
+  // -- T6.1 + T6.2, iPhone 13: the cottage with a second bed, the Gardener and the Baker home for the evening (the
+  // verifiers' repro, seed 10: the second housemate takes a dining chair at the table's end, a quarter turn from it, whose
+  // seat is drawn 0.66 m toward it; on HEAD the Baker sat 0.66 m behind the chair, in mid-air). A real tap on the rail's eye
+  // opens the cutaway: the sitter is drawn on the chair's seat. Then the table is taken away (the chair's seat goes
+  // back to its cell's middle) and put back (undo): the sitter goes with the seat each time (T6.2's recheck)
+  {
+    const { ctx, page, problems } = await game('bp=cottage&nosave=1&town=fresh&townseed=10', { mobile: true });
+    await page.addScriptTag({ content: PAGE });
+    const { tap } = await touchOf(ctx, page);
+    const r = await page.evaluate(async () => {
+      const hw = __hw, D = hw.town.debug;
+      await __t.sleep(2000);
+      const bed = !!hw.world.add({ t: 'bed', x: 2, y: 0, z: 1, r: 1, m: 'wood' });
+      await __t.sleep(500);
+      D.spawn('gardener'); D.spawn('baker');
+      hw.state.set({ timeFlow: true, time: 0.74 });
+      const hit = __r6.toChair(1500);
+      hw.state.set({ timeFlow: false });
+      return { bed, hit };
+    });
+    const eye = await eyeOf(page);
+    if (eye && r.hit) await tap(eye);
+    const seen = await page.evaluate(async (hit) => {
+      const hw = __hw;
+      if (!hit) return null;
+      const s0 = __r6.seat(hit.id);
+      hw.rig.setView({ t: [s0.chair[0], 0.6, s0.chair[1]], th: 2.2, ph: 0.95, r: 6 }, true);
+      await __t.sleep(1500);
+      return { seeAll: hw.state.seeAll, label: document.querySelector('.hw-rail .hw-see')?.textContent.trim(), ...__r6.seat(hit.id) };
+    }, r.hit);
+    check('T6.1', 'the cottage with a second bed, a flowing evening (seed 10): the housemate in a dining chair at the table\'s end (a quarter turn from it) is posed and drawn on the chair\'s seat, tucked 0.66 m toward the table (on HEAD 0.66 m behind it, in mid-air), seen in the cutaway after a real tap on the rail\'s eye',
+      r.bed && !!r.hit && !!eye && seen?.seeAll === false && seen.visible && seen.planGap < 0.06 && seen.gap < 0.1, { ...r, eye: !!eye, seen });
+    // T6.2: the table erased, then undone, while the sitter sits
+    const moves = await page.evaluate(async (hit) => {
+      const hw = __hw, D = hw.town.debug;
+      if (!hit) return null;
+      const out = [];
+      const chair = __r6.chairOf(D.sim.villagers.find((u) => u.id === hit.id)._spot).p;
+      const f = [[0, 1], [1, 0], [0, -1], [-1, 0]][chair.r & 3];
+      const table = [...hw.world.entries.values()].find((e) => e.p.t === 'table' && e.p.x === chair.x + f[0] && e.p.z === chair.z + f[1] && e.p.y === chair.y);
+      if (!table) return { noTable: true };
+      const until = async (ok) => { for (let i = 0; i < 40; i++) { await __t.sleep(150); const s = __r6.seat(hit.id); if (ok(s)) return s; } return __r6.seat(hit.id); };
+      hw.world.remove(table.key);
+      out.push({ step: 'table erased', ...(await until((s) => s.gap < 0.1 && s.planGap < 0.06 && Math.abs(Math.hypot(s.chair[0] - (chair.x + 0.5) * 2, s.chair[1] - (chair.z + 0.5) * 2) - 0.05) < 0.03)) });
+      hw.world.undo();
+      out.push({ step: 'table back (undo)', ...(await until((s) => s.gap < 0.1 && s.planGap < 0.06 && Math.hypot(s.chair[0] - (chair.x + 0.5) * 2, s.chair[1] - (chair.z + 0.5) * 2) > 0.6)) });
+      out.push({ near: __r6.near(0.3) });
+      return out;
+    }, r.hit);
+    check('T6.2', 'the table under the sitter\'s chair erased, then put back with undo: the chair\'s seat moves to its cell\'s middle and back, and the sitter is posed and drawn on it each time (a recompute rechecks indoor places), nobody within 0.3 m',
+      Array.isArray(moves) && moves.length === 3 && moves.slice(0, 2).every((m) => m.spot?.startsWith('seat|chair|') && m.planGap < 0.06 && m.gap < 0.1) && moves[2].near.length === 0, moves);
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+  // -- T6.1, the farmhouse (seed 21, two more beds upstairs, three residents): a dining chair turned like its table, its
+  // seat drawn 0.9 m toward it (on HEAD the sitter was drawn 0.9 m behind the seat)
+  {
+    const { ctx, page, problems } = await game('bp=farmhouse&nosave=1&town=fresh&townseed=21', { mobile: true });
+    await page.addScriptTag({ content: PAGE });
+    const { tap } = await touchOf(ctx, page);
+    const r = await page.evaluate(async () => {
+      const hw = __hw, D = hw.town.debug;
+      await __t.sleep(2000);
+      const beds = [[-2, -3], [-2, -2]].map(([x, z]) => !!hw.world.add({ t: 'bed', x, y: 1, z, r: 0, m: 'wood' }));
+      await __t.sleep(600);
+      D.spawn('gardener'); D.spawn('farmer'); D.spawn('baker');
+      hw.state.set({ timeFlow: true, time: 0.74 });
+      const hit = __r6.toChair(1500);
+      hw.state.set({ timeFlow: false });
+      return { beds, hit };
+    });
+    const eye = await eyeOf(page);
+    if (eye && r.hit) await tap(eye);
+    const seen = await page.evaluate(async (hit) => {
+      const hw = __hw;
+      if (!hit) return null;
+      const s0 = __r6.seat(hit.id);
+      hw.rig.setView({ t: [s0.chair[0], 0.6, s0.chair[1]], th: 2.2, ph: 0.95, r: 6 }, true);
+      await __t.sleep(1500);
+      const e = __r6.chairOf(s0.spot).p, tuck = Math.hypot(s0.chair[0] - (e.x + 0.5) * 2, s0.chair[1] - (e.z + 0.5) * 2);
+      return { seeAll: hw.state.seeAll, tuck: +tuck.toFixed(2), ...__r6.seat(hit.id) };
+    }, r.hit);
+    check('T6.1', 'the farmhouse, three residents (seed 21): the housemate in a dining chair at the table\'s long side (turned like it) is drawn on the chair\'s seat, tucked 0.9 m toward the table (on HEAD 0.9 m behind it), in the cutaway after a real tap on the rail\'s eye',
+      r.beds.every(Boolean) && !!r.hit && !!eye && seen?.seeAll === false && seen.visible && Math.abs(seen.tuck - 0.9) < 0.05 && seen.planGap < 0.06 && seen.gap < 0.1, { ...r, seen });
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+  // -- T6.1 by construction: the piece and the villagers read one seat (config.js CHAIR_SEAT_Z / chairTuck)
+  {
+    const cfg = await import(pathToFileURL(path.join(ROOT, 'js', 'config.js')).href);
+    const fs = await import('node:fs');
+    const decor = fs.readFileSync(path.join(ROOT, 'js', 'pieces', 'decor.js'), 'utf8'), simSrc = fs.readFileSync(path.join(ROOT, 'js', 'town', 'sim.js'), 'utf8');
+    const at = (x, z, t) => (xx, y, zz) => (xx === x && zz === z ? t : null);
+    const tuck = typeof cfg.chairTuck === 'function' ? cfg.chairTuck : () => '?';
+    const codes = [tuck({ x: 0, y: 0, z: 0, r: 0 }, at(0, 1, { t: 'table', r: 0 })), tuck({ x: 0, y: 0, z: 0, r: 1 }, at(1, 0, { t: 'table', r: 0 })),
+      tuck({ x: 0, y: 0, z: 0, r: 2 }, at(0, 1, { t: 'table', r: 0 })), tuck({ x: 0, y: 0, z: 0, r: 3 }, at(-1, 0, { t: 'bed', r: 0 }))];
+    check('T6.1', 'one seat for the chair and its sitter: config.js chairTuck / CHAIR_SEAT_Z (z 0.9, x 0.66, none 0.05) drive both the Ladder-back Chair\'s seat (decor.js) and the dining-chair sit point (sim.js)',
+      codes.join(',') === 'z,x,,' && !!cfg.CHAIR_SEAT_Z && cfg.CHAIR_SEAT_Z.z === 0.9 && cfg.CHAIR_SEAT_Z.x === 0.66 && cfg.CHAIR_SEAT_Z[''] === 0.05
+        && /chairTuck\(p, \(x, y, z\) => ctx\.get\(K\.I\(x, y, z\)\)\)/.test(decor) && /CHAIR_SEAT_Z\[o\.nb\]/.test(decor) && /CHAIR_SEAT_Z\[chairTuck\(p, itemAt\)\]/.test(simSrc), { codes });
+  }
+  // -- T6.2, iPhone 13: the verifiers' repro. The 2-bed hut (seed 4), the Gardener and the Beekeeper home for the evening;
+  // one stands on the floor with a minute and more of it left. A real tap on the eye opens the cutaway and a real tap on
+  // a free corner of that very cell places a Farmhouse Table there: the housemate moves at once to another free place
+  // (on HEAD they stayed 70 s inside the table, the hat through the tabletop)
+  {
+    const { ctx, page, problems } = await game('clean=1&nosave=1&town=fresh&townseed=4', { mobile: true });
+    await page.addScriptTag({ content: PAGE });
+    const { tap } = await touchOf(ctx, page);
+    const r = await page.evaluate(async () => {
+      const hw = __hw, D = hw.town.debug;
+      await __t.sleep(1500);
+      await D.edit((w) => { for (const p of __fx.SMALL_HOME(0, 0)) w.add(p, { record: false }); w.add({ t: 'bed', x: 1, y: 0, z: 0 }, { record: false }); });
+      D.spawn('gardener'); D.spawn('beekeeper');
+      hw.state.set({ timeFlow: true, time: 0.72 });
+      let hit = null;
+      for (let k = 0; k < 1600 && !hit; k++) {
+        D.step(1);
+        const v = D.sim.villagers.find((u) => u.plan?.kind === 'inside' && u.plan.pose === 'stand' && /^floor\|/.test(u._spot || '') && u.plan.t1 - D.state().clock > 60);
+        if (v) hit = { id: v.id, name: v.name, spot: v._spot, at: v.plan.at.slice(), k, h: +(hw.state.time * 24).toFixed(2) };
+      }
+      hw.state.set({ timeFlow: false });
+      return hit;
+    });
+    const eye = await eyeOf(page);
+    if (eye && r) await tap(eye);
+    let placed = null;
+    if (r) {
+      await page.evaluate(() => { __hw.rig.setView({ t: [2, 0.6, 2.5], th: 0.5, ph: 0.55, r: 12 }, true); __hw.state.set({ pieceId: 'table', tool: 'build', level: 0, rot: 0 }); });
+      await wait(1500);
+      const cx = Math.floor(r.at[0] / 2), cz = Math.floor(r.at[2] / 2);
+      for (const [dx, dz] of [[0.36, 0.36], [-0.36, 0.36], [0.36, -0.36], [-0.36, -0.36]]) {
+        const s = await page.evaluate(([x, z]) => { const p = __t.toScreen(new __hw.THREE.Vector3(x, 0.25, z)); return { x: p.x, y: p.y, villager: !!__hw.town.hitTest(p.x, p.y) }; }, [cx * 2 + 1 + dx * 2, cz * 2 + 1 + dz * 2]);
+        if (s.villager) continue;
+        const n0 = await page.evaluate(() => __hw.world.count);
+        await tap([s.x, s.y]);
+        if ((await page.evaluate(() => __hw.world.count)) > n0) { placed = [cx, cz]; break; }
+      }
+    }
+    const after = r && await page.evaluate(async ([id, cell]) => {
+      const hw = __hw, D = hw.town.debug, ix = () => D.model.index;
+      const st = () => { const v = D.sim.villagers.find((u) => u.id === id), q = D.actors.positionOf(id); return { plan: v.plan.kind + ':' + v.plan.pose, spot: v._spot, at: v.plan.at.map((x) => +x.toFixed(2)), drawn: [q.x, q.z].map((x) => +x.toFixed(2)), left: +(v.plan.t1 - D.state().clock).toFixed(1) }; };
+      const inCell = (p) => Math.floor(p[0] / 2) === cell[0] && Math.floor(p[p.length - 1] / 2) === cell[1];
+      let a = st();
+      for (let i = 0; i < 20 && inCell(a.at); i++) { await __t.sleep(150); a = st(); }
+      await __t.sleep(1200);                         // the actor eases over
+      a = st();
+      const recs = [...hw.world.entries.values()].filter((e) => e.p.x === cell[0] && e.p.z === cell[1] && e.p.y === 0).map((e) => e.p.t);
+      const furnished = !!ix().I.get(Math.floor(a.at[0] / 2) + '|0|' + Math.floor(a.at[2] / 2));
+      return { ...a, recs, planInTable: inCell(a.at), drawnInTable: inCell(a.drawn), furnished, near: __r6.near(0.3) };
+    }, [r.id, placed || [Math.floor(r.at[0] / 2), Math.floor(r.at[2] / 2)]]);
+    check('T6.2', 'the 2-bed hut in the evening (seed 4): a real tap places a Farmhouse Table on the floor cell where a housemate stands (cutaway): within 3 s they stand on another free floor place, holding it, posed and drawn off the table, the rest of their step kept; nobody within 0.3 m (on HEAD they stayed inside the table for 70 s)',
+      !!r && !!eye && !!placed && after.recs.includes('table') && after.plan === 'inside:stand' && /^floor\|/.test(after.spot || '') && after.spot !== r.spot && !after.planInTable && !after.drawnInTable && !after.furnished && after.left > 30 && after.near.length === 0,
+      { hit: r, eye: !!eye, placed, after });
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+  // -- T6.2 by the debug API: (a) the seat under a sitter erased; (b) an indoor step planned for a floor place that is
+  // furnished before the step starts (a housemate on the way in): neither is left in mid-air or inside the new piece
+  {
+    const { ctx, page, problems } = await game('bp=cottage&nosave=1&town=fresh&townseed=3&spawn=gardener,beekeeper&time=0.42', { mobile: true });
+    await page.addScriptTag({ content: PAGE });
+    const r = await page.evaluate(async () => {
+      const hw = __hw, D = hw.town.debug, S = D.sim;
+      hw.state.set({ timeFlow: false, time: 0.42 });
+      await __t.sleep(1000);
+      const home = D.homes()[0];
+      const [a, b] = S.villagers;
+      const out = {};
+      // (a) a sitter in the armchair (a step naming its seat; claimInside books it at the seat's real point); erased
+      const arm = [...hw.world.entries.values()].find((e) => e.p.t === 'armchair');
+      a._steps = [{ k: 'inside', homeId: home.id, kind: 'sit', spot: 'seat|armchair|' + arm.p.x + '|0|' + arm.p.z + '|0', at: [(arm.p.x + 0.5) * 2, 0.7, (arm.p.z + 0.5) * 2], face: 0, level: 0, pose: 'sit', dur: Infinity }];
+      a.plan = { ...a.plan, t1: hw.town.clock() }; D.step(2);
+      out.a0 = { plan: a.plan.kind + ':' + a.plan.pose, spot: a._spot, at: a.plan.at.map((x) => +x.toFixed(2)) };
+      await D.edit((w) => w.remove(arm.key, { record: false }));
+      D.step(1);
+      out.a1 = { plan: a.plan.kind + ':' + a.plan.pose, spot: a._spot, at: a.plan.at.map((x) => +x.toFixed(2)) };
+      // (b) a step for a free floor cell of the cottage (none of its housemates on it), then a table set there before
+      // the step starts
+      const B0 = D.model.buildings.find((x) => x.id === home.id), lo = B0.lo | 0, ix = D.model.index;
+      const busy = S.villagers.filter((u) => u.plan?.at).map((u) => Math.floor(u.plan.at[0] / 2) + ',' + Math.floor(u.plan.at[2] / 2));
+      const c = B0.foot.find(([x, z]) => B0.cells.has(x + '|' + lo + '|' + z) && !ix.I.has(x + '|' + lo + '|' + z) && !busy.includes(x + ',' + z));
+      out.cell = c;
+      b._steps = [{ k: 'inside', homeId: home.id, kind: 'stand', spot: 'floor|' + c[0] + '|' + lo + '|' + c[1] + '|0', at: [c[0] * 2 + 1, 0.25, c[1] * 2 + 1], face: 0, level: lo, pose: 'stand', dur: Infinity }];
+      let added = false;
+      await D.edit((w) => { added = !!w.add({ t: 'table', x: c[0], y: lo, z: c[1], r: 0 }, { record: false }); });
+      b.plan = { ...b.plan, t1: hw.town.clock() }; D.step(2);
+      const bc = [Math.floor(b.plan.at[0] / 2), Math.floor(b.plan.at[2] / 2)];
+      out.b = { added, plan: b.plan.kind + ':' + b.plan.pose, spot: b._spot, at: b.plan.at.map((x) => +x.toFixed(2)), inTable: bc[0] === c[0] && bc[1] === c[1],
+        furnished: /^floor\|/.test(b._spot || '') && !!D.model.index.I.get(bc[0] + '|' + lo + '|' + bc[1]) };
+      out.near = __r6.near(0.3);
+      return out;
+    });
+    check('T6.2', 'the armchair erased under its sitter: they take another place at once (not left sitting in mid-air); an indoor step planned for a floor cell furnished before it starts goes to another free place (by the range, or a floor cell with nothing on it), not inside the new table; nobody within 0.3 m',
+      r.a0.spot?.startsWith('seat|armchair|') && r.a1.plan.startsWith('inside:') && !!r.a1.spot && r.a1.spot !== r.a0.spot && Math.hypot(r.a1.at[0] - r.a0.at[0], r.a1.at[2] - r.a0.at[2]) > 0.3
+        && r.b.added && r.b.plan === 'inside:stand' && !!r.b.spot && r.b.spot !== 'floor|' + r.cell[0] + '|0|' + r.cell[1] + '|0' && !r.b.inTable && !r.b.furnished && r.near.length === 0, r);
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+  // -- T6.3, iPhone 13: the cottage with a second bed, the Gardener and the Baker indoors with a wish each (their
+  // bubbles share the roof anchor: one '×2' on screen). (a) real two-finger slides pan the cottage off screen: one edge
+  // bubble '×2' ('and 1 more'), not two on one point with the second hidden. (b) a real tap on the eye and a close-up
+  // in the cutaway, the roof anchor above the top bar: again one '×2' edge bubble
+  {
+    const { ctx, page, problems } = await game('bp=cottage&nosave=1&town=fresh&townseed=8', { mobile: true });
+    const { tap, slide2 } = await touchOf(ctx, page);
+    const r = await page.evaluate(async () => {
+      const hw = __hw, D = hw.town.debug;
+      await __t.sleep(2000);
+      hw.world.add({ t: 'bed', x: 2, y: 0, z: 1, r: 1, m: 'wood' });
+      await __t.sleep(500);
+      D.spawn('gardener'); D.spawn('baker');
+      hw.state.set({ timeFlow: true, time: 0.74 });
+      for (let k = 0; k < 900; k++) { D.step(1); if (k > 300 && D.sim.villagers.filter((v) => v.plan?.kind === 'inside').length === 2) break; }
+      hw.state.set({ timeFlow: false });
+      for (const v of D.sim.villagers) if (!v.wish) for (const t of ['w_birds', 'w_mailbox', 'w_door_lamp', 'w_soft_rug', 'w_pet', 'w_well']) if (D.wish(v.id, t).ok) break;
+      await __t.sleep(1500);
+      return D.sim.villagers.map((v) => v.name + ':' + (v.wish && v.wish.tpl) + ':' + v.plan.kind);
+    });
+    const vis = () => page.evaluate(() => [...document.querySelectorAll('.hw-bubble.k-wish')].filter((b) => !b.classList.contains('is-hid') && b.getBoundingClientRect().width > 0)
+      .map((b) => ({ txt: b.textContent, edge: b.classList.contains('is-edge'), tf: b.style.transform.split(' translate(')[0], label: b.getAttribute('aria-label') })));
+    const on = await vis();
+    const steps = [];
+    for (let i = 0; i < 4; i++) {
+      await slide2(195, 300, -160, 120);
+      const b = await vis();
+      steps.push(b);
+      if (b.some((x) => x.edge)) break;
+    }
+    const off = steps[steps.length - 1] || [];
+    check('T6.3', 'two housemates indoors with a wish each, panned off screen by real two-finger slides: their edge bubbles (one roof anchor) merge into one ×2 bubble, labelled \'and 1 more\' (on HEAD two bubbles on one point, the second hidden, no ×2)',
+      r.every((x) => /:w_|:J_/.test(x) && /:inside$/.test(x)) && on.length === 1 && /×2/.test(on[0].txt) && off.length === 1 && off[0].edge && /×2/.test(off[0].txt) && /and 1 more/.test(off[0].label),
+      { r, on, off });
+    // (b) the cutaway close-up
+    await page.evaluate(() => __hw.rig.setView({ t: [1, 0.6, 0], th: 0.6, ph: 0.75, r: 11 }, true));
+    await wait(1200);
+    const eye = await eyeOf(page);
+    if (eye) await tap(eye);
+    await page.evaluate(() => __hw.rig.setView({ t: [1.5, 0.6, 1.5], th: 0.6, ph: 0.75, r: 10 }, true));
+    await wait(1500);
+    const cut = { seeAll: await page.evaluate(() => __hw.state.seeAll), b: await vis() };
+    check('T6.3', 'the same two in the cutaway close-up after a real tap on the eye (their roof anchor above the top bar): one ×2 edge bubble, never two stacked on one point',
+      !!eye && cut.seeAll === false && cut.b.length === 1 && /×2/.test(cut.b[0].txt) && (cut.b[0].edge ? /and 1 more/.test(cut.b[0].label) : true), cut);
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+  // -- T6.4: the farmhouse with two more beds upstairs, a traveller on the way; debug.spawn twice meanwhile: ids unique,
+  // the spawned villagers drawn at their own places (on HEAD the first got the traveller's id and was drawn on the
+  // lane with it); the traveller moves in later, ids still unique
+  {
+    const { ctx, page, problems } = await game('bp=farmhouse&nosave=1&town=fresh&townseed=13', {});
+    const r = await page.evaluate(async () => {
+      const hw = __hw, D = hw.town.debug, S = D.sim;
+      await D.edit((w) => { for (const [x, z] of [[-2, -3], [-2, -2]]) w.add({ t: 'bed', x, y: 1, z, r: 0 }, { record: false }); });
+      for (let i = 0; i < 80 && !S.traveller; i++) await __t.sleep(250);
+      if (!S.traveller) D.traveller();
+      const trav = S.traveller && S.traveller.id, travName = S.traveller && S.traveller.name;
+      const a = D.spawn('gardener'), b = D.spawn('beekeeper');
+      await __t.sleep(2500);
+      const ids = [...S.villagers.map((v) => v.id), S.traveller && S.traveller.id].filter(Boolean);
+      const drawn = [a, b].map((id) => { const v = S.villagers.find((u) => u.id === id), q = D.actors.positionOf(id), p = v.plan.kind === 'walk' ? null : (v.plan.ground || v.plan.at || v._pos); return p ? +Math.hypot(q.x - p[0], q.z - p[2]).toFixed(2) : 0; });
+      for (let k = 0; k < 3000 && S.traveller; k++) D.step(1);
+      const ids2 = S.villagers.map((v) => v.id);
+      return { trav, travName, spawned: [a, b], ids, dup: ids.filter((x, i) => ids.indexOf(x) !== i), drawn, joined: !S.traveller && S.villagers.some((v) => v.id === trav && v.name === travName), ids2, dup2: ids2.filter((x, i) => ids2.indexOf(x) !== i), nextOk: ids2.every((id) => +id.slice(1) < (D.sim.serialize?.().nextId ?? Infinity)) };
+    });
+    check('T6.4', 'debug.spawn twice while a traveller is on the way: ids unique (never the traveller\'s), the spawned villagers drawn at their own places (not on the lane with the traveller); the traveller moves in later with its own id, still unique',
+      !!r.trav && r.spawned.every(Boolean) && !r.spawned.includes(r.trav) && r.dup.length === 0 && r.drawn.every((d) => d < 0.6) && r.joined && r.dup2.length === 0 && r.nextOk, r);
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+  check('T6.x', 'no console errors (repair6)', allProblems.length === 0, allProblems.slice(0, 4));
 });
 
 // ---------------------------------------------------------------- the feel check's must-fixes (M2): asleep the right way round

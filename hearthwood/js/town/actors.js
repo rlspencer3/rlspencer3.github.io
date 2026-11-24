@@ -29,6 +29,7 @@ const SEATED_MIN = 0.28;           // a pose spot this far above its floor is a 
 const STRIDE = 0.9;                // metres per full walk cycle (two steps)
 const HIT_R = 0.3;                 // hit capsule radius (§12.4)
 const POSE_SEP = 0.45;             // m: two posed villagers nearer than this are drawn apart (a backstop, R4 T4.4)
+const LIE_HALF = 0.5;              // m: half a lying body either side of its centre, for that backstop (R5 T5.2)
 const TENT_LANTERN = tentGeometry().userData.lantern;
 const PKEYS = ['armL', 'armR', 'sit', 'tool', 'hy', 'hp', 'lean', 'twist', 'rock', 'seat'];
 const FOLEY = new Set(['chop', 'splash', 'cluck', 'hum']);
@@ -300,7 +301,7 @@ export function createActors(app, opts = {}) {
 
   // ------------------------------------------------------------------ the frame
 
-  const others = [];
+  const others = [], posed = [];
   function update(dt, clock, frame = {}) {
     const t0 = performance.now();
     dt = Math.max(0, Math.min(0.1, dt || 0));
@@ -311,7 +312,7 @@ export function createActors(app, opts = {}) {
     // remove faded-out actors
     for (const [id, a] of actors) if (a.removing && a.appear <= 0.001) actors.delete(id);
     // pass 1: plans → targets, smoothing, positions
-    others.length = 0;
+    others.length = 0; posed.length = 0;
     for (const a of actors.values()) {
       const m = a.model, p = m.plan;
       if (p !== a.plan || m.planId !== a.planId) {
@@ -351,6 +352,7 @@ export function createActors(app, opts = {}) {
       a.lpx = a.x; a.lpz = a.z; a.hasLast = true;
       a.walkAmp += ((tg.kind === 'walk' && tg.speed > 0.05 && !tg.hopY ? 1 : 0) - a.walkAmp) * ease(dt, 8);
       if (a.vis && !tg.inside && !tg.lie) others.push(a);
+      if (a.vis && (tg.kind === 'pose' || tg.kind === 'inside') && a.walkAmp < 0.3) posed.push(a);
     }
     // pass 2: cosmetic separation (lateral only, ≤ 0.3 m) and heads turning to neighbours
     for (const a of others) {
@@ -366,30 +368,43 @@ export function createActors(app, opts = {}) {
         }
       }
       a.lat += (clamp(push * 0.3, -0.3, 0.3) - a.lat) * ease(dt, a.walkAmp > 0.3 ? 4 : 2);
-      // the backstop for two villagers posed on one spot (the sim books places so it never happens, R4 T4.4): drawn
-      // apart to POSE_SEP, so they never read as one figure with two hats. Coincident ones split along the lower id's
-      // left–right axis, the lower id to its left
-      let sx = 0, sz = 0;
-      if (a.walkAmp < 0.3 && a.tg.kind === 'pose') {
-        for (const b of others) {
-          if (b === a || b.walkAmp >= 0.3 || b.tg.kind !== 'pose' || Math.abs(b.y - a.y) > 0.6) continue;
-          const dx = a.x - b.x, dz = a.z - b.z, d = Math.sqrt(dx * dx + dz * dz);
-          if (d >= POSE_SEP) continue;
-          let ux = 0, uz = 0;
-          if (d > 1e-3) { ux = dx / d; uz = dz / d; } else {
-            const lo = a.id < b.id ? a : b, sg = lo === a ? 1 : -1;
-            ux = Math.cos(lo.yaw) * sg; uz = -Math.sin(lo.yaw) * sg;
-          }
-          sx += ux * (POSE_SEP - d) / 2; sz += uz * (POSE_SEP - d) / 2;
-        }
-      }
-      a.sepX += (sx - a.sepX) * ease(dt, 4); a.sepZ += (sz - a.sepZ) * ease(dt, 4);
       // passing another villager: a wave, more often in a cosier town (§9.2: 20 / 40 / 60 / 80 %), once per meeting
       if (near && near !== a.met && nd < 1.6 && (a.walkAmp > 0.3 || near.walkAmp > 0.3) && a.model.status !== 'passerby') {
         if (Math.random() < WAVE_P[a.model.mood | 0] && time > a.waveUntil + 4) a.waveUntil = time + 1.4;
       }
       if (!near || nd > 2.4) a.met = null; else a.met = near;
       a.near = near;
+    }
+    // the backstop for two villagers posed on one spot, outdoors or in (the sim books places so it never happens, R4
+    // T4.4, R5 T5.1/T5.2): drawn apart to POSE_SEP, so they never read as one figure with two hats. A lying body is its
+    // centre ± LIE_HALF along its face and is never moved: whoever is posed on it moves the whole way off. Coincident
+    // ones split along the lower id's left–right axis, the lower id to its left. Every actor eases back to 0 otherwise
+    for (const a of actors.values()) {
+      let sx = 0, sz = 0;
+      const tg = a.tg;
+      if (a.vis && !tg.lie && a.walkAmp < 0.3 && (tg.kind === 'pose' || tg.kind === 'inside')) {
+        for (const b of posed) {
+          if (b === a || Math.abs(b.tg.ground - tg.ground) > 1) continue;
+          let px = b.x, pz = b.z;
+          if (b.tg.lie) {                               // nearest point of the lying body
+            const fx = Math.sin(b.tg.yaw), fz = Math.cos(b.tg.yaw);
+            const t = clamp((a.x - b.x) * fx + (a.z - b.z) * fz, -LIE_HALF, LIE_HALF);
+            px += fx * t; pz += fz * t;
+          }
+          const dx = a.x - px, dz = a.z - pz, d = Math.sqrt(dx * dx + dz * dz);
+          if (d >= POSE_SEP) continue;
+          let ux = 0, uz = 0;
+          if (d > 1e-3) { ux = dx / d; uz = dz / d; } else if (b.tg.lie) {
+            ux = Math.cos(b.tg.yaw); uz = -Math.sin(b.tg.yaw);     // off the sleeper's side
+          } else {
+            const lo = a.id < b.id ? a : b, sg = lo === a ? 1 : -1;
+            ux = Math.cos(lo.yaw) * sg; uz = -Math.sin(lo.yaw) * sg;
+          }
+          const share = b.tg.lie ? 1 : 0.5;
+          sx += ux * (POSE_SEP - d) * share; sz += uz * (POSE_SEP - d) * share;
+        }
+      }
+      a.sepX += (sx - a.sepX) * ease(dt, 4); a.sepZ += (sz - a.sepZ) * ease(dt, 4);
     }
     // pass 3: rig, matrices, instances
     for (const a of actors.values()) {

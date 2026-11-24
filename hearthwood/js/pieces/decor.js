@@ -20,7 +20,7 @@
 
 import * as THREE from 'three';
 import { registerPiece } from '../catalog.js';
-import { BASE_Y, LEVEL_H, WALL_T, K, DIRS } from '../config.js';
+import { BASE_Y, LEVEL_H, WALL_T, K, DIRS, CHAIR_SEAT_Z, chairTuck } from '../config.js';
 import { mat } from '../materials.js';
 import { boxGeo, cylGeo, sphereGeo, coneGeo, prismGeo, cached, add } from '../geom.js';
 
@@ -467,7 +467,6 @@ function nbI(p, ctx, lx, lz) {
   const f = DIRS[p.r & 3], sd = DIRS[(p.r + 1) & 3];
   return ctx.get(K.I(p.x + lx * sd[0] + lz * f[0], p.y, p.z + lx * sd[1] + lz * f[1]));
 }
-const TABLES = new Set(['table']);
 const BEDS = new Set(['bed']);
 
 const FURN = ['wood', 'timber', 'paintedWood'];
@@ -556,14 +555,11 @@ decor({
   id: 'chair', name: 'Ladder-back Chair', cat: 'interior', icon: '🪑', sound: 'wood',
   mats: FURN, matGroup: 'furniture', paint: true,
   desc: 'A farmhouse chair with a cushion. Face it toward a table and it tucks right in.',
-  // facing a table: tuck in — further when facing its long side (the table is 1.8 m × 1.2 m)
-  nb(p, ctx) {
-    const t = nbI(p, ctx, 0, 1);
-    if (!t || !TABLES.has(t.t)) return '';
-    return ((p.r - (t.r || 0)) & 1) ? 'x' : 'z';
-  },
+  // facing a table: tuck in — further when facing its long side (the table is 1.8 m × 1.2 m). config.js holds the
+  // seat's place (CHAIR_SEAT_Z by chairTuck's code), so villagers sit just where it is drawn (R6 T6.1)
+  nb(p, ctx) { return chairTuck(p, (x, y, z) => ctx.get(K.I(x, y, z))); },
   build(g, p, o) {
-    ladderChair(g, woodOf(p), o.nb === 'z' ? 0.9 : o.nb === 'x' ? 0.66 : 0.05);
+    ladderChair(g, woodOf(p), CHAIR_SEAT_Z[o.nb] ?? CHAIR_SEAT_Z['']);
   },
 });
 

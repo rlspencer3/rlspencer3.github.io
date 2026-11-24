@@ -67,6 +67,11 @@ phone. Prefer a few well-proportioned details (trim, sills, frames, caps) over m
 
 `levelY(y) = BASE_Y + y * LEVEL_H` is the floor height of level `y`.
 
+The Ladder-back Chair's seat tucks up to a table in the cell in front of it: `chairTuck(p, itemAt)` gives its code
+('z' turned like the table, 'x' a quarter turn from it, '' no table) and `CHAIR_SEAT_Z[code]` its seat's local z
+(0.9 / 0.66 / 0.05 m). Both the piece (decor.js) and the town's sitters (town/sim.js) read them, so a villager sits
+just where the seat is drawn.
+
 * Cell `(x, z)` spans world X `[x*CELL, (x+1)*CELL]`, Z `[z*CELL, (z+1)*CELL]`.
 * Vertex `(x, z)` is at world `(x*CELL, z*CELL)`.
 * Edge axis `'x'` at `(x, z)`: segment vertex(x,z) → vertex(x+1,z) (runs along +X at world Z = z*CELL).
