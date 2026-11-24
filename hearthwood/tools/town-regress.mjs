@@ -5,7 +5,7 @@
 //   --only=a,b   run only these sections (params, spine, off, settings, crash, importfail, autosave, parts, offline,
 //                blueprints, homes, arrival, evict, stuck, budget, determinism, passerby, showme, gifts, share, photo,
 //                villageoff, guided, persist, taps, migration, twotabs, watch, repair1, repair2, repair3, repair4, repair5,
-//                repair6, repair7, feel)
+//                repair6, repair7, repair8, feel)
 // M0: the spine — boot / ready / restore recompute (R1), the TownAPI and debug shape, params, enabled(), clocks,
 // recompute scheduling, rig pass-through, failure isolation, an import failure (R5's last case), the core edits
 // (state keys, env exports, catalog.setHidden, the autosave guard) and R13.
@@ -28,7 +28,10 @@
 // inside the new piece or in mid-air; housemates' edge bubbles merge into one ×2; debug.spawn never reuses a pending
 // traveller's id) and `repair7` (T7.x: a sleeper whose bed is replaced in one edit is booked again at once, and sleeps in
 // a newly given bed; edge bubbles of different kinds never merge, they fan apart; a ×N badge sits opposite the edge
-// arrow); R11 also shows every feasible wish with Show me (the ghost is one mesh,
+// arrow) and `repair8` (T8.x, the round-7 review: a waiting sleeper keeps their bed and gets it back, a new bed in a
+// full home takes nobody's; edge bubbles never flip sides, never sit on the wrapped rail of a short phone, never under
+// a neighbour's arrow in landscape; a wish and a dream on one point side by side; a merged dreams' count readable);
+// R11 also shows every feasible wish with Show me (the ghost is one mesh,
 // T2.4), and judges its wall-clock budgets on the fastest of several batches (T2.5, T3.7).
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
@@ -2976,6 +2979,183 @@ await section('repair7', async () => {
     await ctx.close();
   }
   check('T7.x', 'no console errors (repair7)', allProblems.length === 0, allProblems.slice(0, 4));
+});
+
+// ---------------------------------------------------------------- repair8: the round-7 review (sleepers, edge bubble layout)
+await section('repair8', async () => {
+  const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+  const allProblems = [];
+  // synthetic bubbles anchored on chosen screen points (town.bubbles replaced in the page), and what the hud drew
+  const SYN = String.raw`window.__s8 = {
+    install() { const t = __hw.town; if (!window.__s8orig) window.__s8orig = t.bubbles; window.__s8b = []; t.bubbles = () => window.__s8b; },
+    at(sx, sy, d = 25) { const hw = __hw, cam = hw.camera, cv = hw.renderer.domElement; const v = new hw.THREE.Vector3((sx / cv.clientWidth) * 2 - 1, 1 - (sy / cv.clientHeight) * 2, 0.5).unproject(cam); const dir = v.sub(cam.position).normalize(); const p = cam.position.clone().addScaledVector(dir, d); return [p.x, p.y, p.z]; },
+    free() { const cv = __hw.renderer.domElement, I = __hw.rig.insets; return { fl: I.left, ft: I.top, fr: cv.clientWidth - I.right, fb: cv.clientHeight - I.bottom }; },
+    // a screen point whose natural edge point is X on the top edge / Y on the right edge
+    top(X) { const f = this.free(), cx = (f.fl + f.fr) / 2, cy = (f.ft + f.fb) / 2, hh = (f.fb - f.ft) / 2 - 50; return [2 * X - cx, cy - 2 * hh]; },
+    right(Y) { const f = this.free(), cx = (f.fl + f.fr) / 2, cy = (f.ft + f.fb) / 2, hw = (f.fr - f.fl) / 2 - 50; return [cx + 2 * hw, 2 * Y - cy]; },
+    set(specs) { window.__s8b = specs.map((s, i) => ({ key: s.key || s.kind[0] + ':' + i, kind: s.kind, icon: { traveller: '🎒', wish: '💡', dream: '🪴' }[s.kind], label: 'syn ' + s.kind + ' ' + i, at: this.at(s.sx, s.sy), villager: s.villager || 'syn-' + i, tappable: true, arrow: s.kind === 'traveller' })); },
+    drawn() { return [...document.querySelectorAll('.hw-bubble')].filter((b) => !b.classList.contains('is-hid') && b.getBoundingClientRect().width > 0).map((b) => {
+      const r = (e) => { const q = e.getBoundingClientRect(); return [q.left, q.top, q.right, q.bottom]; };
+      const c = r(b.querySelector('.hw-bubble-c')), bd = b.querySelector('.hw-bubble-badge'), edge = b.classList.contains('is-edge');
+      return { kind: [...b.classList].find((k) => k.startsWith('k-')), edge, merged: b.classList.contains('is-merged'), label: b.getAttribute('aria-label'), x: (c[0] + c[2]) / 2, y: (c[1] + c[3]) / 2, disc: c,
+        arrow: edge ? r(b.querySelector('.hw-bubble-arrow')) : null, badge: getComputedStyle(bd).display !== 'none' ? r(bd) : null, badgeBg: getComputedStyle(bd).backgroundColor };
+    }); },
+  };`;
+  const hit = (A, B) => !!A && !!B && !(A[2] <= B[0] || B[2] <= A[0] || A[3] <= B[1] || B[3] <= A[1]);
+
+  // -- T8.1: a sleeper whose home lost its roof (waiting) keeps sleeping in their own bed, and is still there when the
+  // roof is back; a bed swapped for a table and back again: the sleeper ends in their bed (on the code before, they
+  // spent the rest of the night on the armchair beside a free bed of their own). A fifth bed added to a full home at
+  // night takes nobody's bed (on the code before, a new bed sorting first took one away and got its owner up)
+  {
+    const { ctx, page, problems } = await game('bp=cottage&nosave=1&town=fresh&townseed=10', {});
+    const r = await page.evaluate(async () => {
+      const hw = __hw, D = hw.town.debug, S = D.sim, out = {};
+      hw.state.set({ timeFlow: false });
+      D.spawn('gardener', { trait: 'homebody' });
+      D.phase('night'); D.step(2); S.reseat(); D.step(2);
+      await __t.sleep(800);
+      const v = S.villagers[0], bedKey = v.bed, rec = { ...hw.world.entries.get(bedKey).p }, bedSpot = 'bed|' + bedKey.split('|').slice(1).join('|');
+      const snap = () => ({ status: v.status, spot: v._spot, pose: v.plan.pose });
+      out.asleep = snap();
+      const roofs = [...hw.world.entries.values()].filter((e) => /roof/.test(e.def.id)).slice(0, 3).map((e) => ({ key: e.key, p: { ...e.p } }));
+      await D.edit((w) => { for (const q of roofs) w.remove(q.key); });
+      D.advance(6); out.roofOff = snap();
+      await D.edit((w) => { for (const q of roofs) w.add(q.p); });
+      D.advance(6); out.roofBack = snap();
+      await D.edit((w) => { w.remove(bedKey); w.add({ t: 'table', x: rec.x, y: rec.y, z: rec.z, r: rec.r }); });
+      D.advance(6); out.table = snap();
+      await D.edit((w) => { w.remove(bedKey); w.add({ t: 'bed', x: rec.x, y: rec.y, z: rec.z, r: rec.r }); });
+      D.advance(6); out.bedBack = snap();
+      out.bedSpot = bedSpot;
+      return out;
+    });
+    check('T8.1', 'a sleeper whose home loses its roof (waiting) stays in their own bed and is still there once the roof is back; a bed swapped for a table and back: they end in their own bed again',
+      r.asleep.spot === r.bedSpot && r.roofOff.status === 'waiting' && r.roofOff.spot === r.bedSpot && r.roofBack.status === 'resident' && r.roofBack.spot === r.bedSpot
+      && r.table.spot !== r.bedSpot && r.table.pose === 'sleep' && r.bedBack.status === 'resident' && r.bedBack.spot === r.bedSpot && r.bedBack.pose === 'sleep', r);
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+  {
+    const { ctx, page, problems } = await game('clean=1&nosave=1&town=fresh&townseed=3', {});
+    const r = await page.evaluate(async () => {
+      const hw = __hw, D = hw.town.debug, S = D.sim;
+      hw.state.set({ timeFlow: false });
+      await D.edit((w) => { for (const p of __fx.HOME4(0, 0)) w.add(p); });   // four beds along z 0 (I|0..3|0|0)
+      for (const j of ['gardener', 'baker', 'fisher', 'farmer']) D.spawn(j, { trait: 'homebody' });
+      D.phase('night'); D.step(2); S.reseat(); D.step(2);
+      const snap = () => S.villagers.map((u) => [u.name, u.status, u.bed, u._spot, u.plan.at.map((q) => +q.toFixed(2)).join(',')].join(' '));
+      const before = snap();
+      await D.edit((w) => w.add({ t: 'bed', x: 0, y: 0, z: 1, r: 0 }));   // I|0|0|1 sorts before I|1|0|0
+      D.advance(5);
+      return { before, after: snap() };
+    });
+    check('T8.1', 'a fifth bed added at night to a full four-bed home takes nobody\'s bed: every resident keeps their bed and their place',
+      r.before.length === 4 && r.before.every((s) => / resident I\|/.test(s)) && JSON.stringify(r.before) === JSON.stringify(r.after), r);
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+
+  // -- T8.2, iPhone 13: a traveller's top-edge point wobbling 1-3 px around an off-screen wish's (40 frames): the
+  // fanned wish never flips across it (on the code before it jumped 96 px back and forth)
+  {
+    const { ctx, page, problems } = await game('bp=cottage&nosave=1&town=fresh&townseed=3', { mobile: true });
+    await page.addScriptTag({ content: SYN });
+    await page.evaluate(() => __s8.install());
+    const sides = [];
+    for (let i = 0; i < 40; i++) {
+      const X = 161 + [-3, -1, 0, 1, 3, 1, 0, -1][i % 8];
+      await page.evaluate((X) => { const w = __s8.top(161), t = __s8.top(X); __s8.set([{ kind: 'traveller', sx: t[0], sy: t[1] }, { kind: 'wish', sx: w[0], sy: w[1] }]); }, X);
+      await wait(110);
+      const d = await page.evaluate(() => __s8.drawn());
+      const t = d.find((b) => b.kind === 'k-traveller'), w = d.find((b) => b.kind === 'k-wish');
+      sides.push(t && w && !w.merged && !t.merged ? Math.sign(w.x - t.x) : 0);
+    }
+    let flips = 0; for (let i = 1; i < sides.length; i++) if (sides[i] !== sides[i - 1]) flips++;
+    check('T8.2', 'an off-screen wish fanned beside a traveller whose edge point wobbles 1-3 px around it (40 frames): two bubbles every frame, never flipping sides', flips === 0 && sides.every((x) => x !== 0), { flips, sides: sides.join('') });
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+
+  // -- T8.3, 320×568 (the rail wraps into a second column inside the free area): a traveller and a real wish at one
+  // right-edge point: neither bubble meets a rail button; a real tap on the wish opens its card and leaves Draw off.
+  // With two toasts up and the natural point under the rail: still nothing on the rail buttons or under the toasts
+  {
+    const SE = { viewport: { width: 320, height: 568 }, screen: { width: 320, height: 568 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 };
+    const { ctx, page, problems } = await game('bp=cottage&nosave=1&town=fresh&townseed=3', { device: SE });
+    await page.addScriptTag({ content: SYN });
+    const vid = await page.evaluate(async () => { const D = __hw.town.debug; const id = D.spawn('gardener'); D.step(10); D.wish(id, 'w_door_lamp'); await __t.sleep(400); __s8.install(); return id; });
+    const rails = () => page.evaluate(() => [...document.querySelectorAll('.hw-rail-group')].map((g) => { const q = g.getBoundingClientRect(); return [q.left, q.top, q.right, q.bottom]; }));
+    const R = await rails();
+    await page.evaluate((vid) => { const p = __s8.right(200); __s8.set([{ kind: 'traveller', sx: p[0], sy: p[1] }, { kind: 'wish', sx: p[0], sy: p[1], villager: vid }]); }, vid);
+    await wait(400);
+    const a = await page.evaluate(() => __s8.drawn());
+    const clearA = a.length === 2 && a.every((b) => !b.merged && R.every((q) => !hit(b.disc, q)));
+    const w = a.find((b) => b.kind === 'k-wish');
+    let tapped = null;
+    if (w) {
+      const cdp = await ctx.newCDPSession(page);
+      const touch = (type, pts) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: pts.map((q, i) => ({ x: q[0], y: q[1], id: i, radiusX: 4, radiusY: 4, force: 1 })) });
+      await touch('touchStart', [[w.x, w.y]]); await wait(60); await touch('touchEnd', []); await wait(1000);
+      tapped = await page.evaluate(() => ({ draw: __hw.state.drawMode, card: document.querySelector('.hw-tcard.is-open')?.className || null }));
+      await page.evaluate(() => document.querySelector('.hw-tcard.is-open .hw-tc-x')?.click());
+      await wait(500);
+    }
+    await page.evaluate(() => { __hw.events.emit('toast', { text: 'First toast: something happened in the village today', kind: 'info', ms: 8000 }); __hw.events.emit('toast', { text: 'Second toast: another long message to stack up', kind: 'info', ms: 8000 }); });
+    await wait(500);
+    await page.evaluate(() => { const p = __s8.right(280); __s8.set([{ kind: 'traveller', sx: p[0], sy: p[1] }, { kind: 'wish', sx: p[0], sy: p[1] }]); });
+    await wait(400);
+    const b = await page.evaluate(() => __s8.drawn());
+    const band = await page.evaluate(() => { const t = document.querySelector('.hw-toasts'); const q = t.getBoundingClientRect(); return t.childElementCount ? [q.left, q.top, q.right, q.bottom] : null; });
+    const clearB = b.length >= 1 && b.every((x) => R.every((q) => !hit(x.disc, q)) && !hit(x.disc, band));
+    check('T8.3', 'a 320×568 phone (the rail wraps into the free area): fanned edge bubbles never sit on a rail button, a real tap on the wish opens its card and leaves Draw off; with two toasts up, nothing on the rail or under the toasts',
+      clearA && !!tapped && tapped.draw === false && /k-villager/.test(tapped.card || '') && !!band && clearB, { R, a: a.map((x) => [x.kind, Math.round(x.x), Math.round(x.y), x.merged]), tapped, band, b: b.map((x) => [x.kind, Math.round(x.x), Math.round(x.y), x.merged]) });
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+
+  // -- T8.4, 844×390: a traveller, two wishes and a dream at one top-edge point (near-level arrows): fanned apart so no
+  // arrow meets another bubble's disc or badge, and the ×2 badge meets no arrow
+  {
+    const L = { viewport: { width: 844, height: 390 }, screen: { width: 844, height: 390 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 };
+    const { ctx, page, problems } = await game('bp=cottage&nosave=1&town=fresh&townseed=3', { device: L });
+    await page.addScriptTag({ content: SYN });
+    await page.evaluate(() => __s8.install());
+    const res = [];
+    for (const X of [90, 690]) {
+      await page.evaluate((X) => { const p = __s8.top(X); __s8.set([{ kind: 'wish', sx: p[0], sy: p[1] }, { kind: 'wish', sx: p[0], sy: p[1] }, { kind: 'traveller', sx: p[0], sy: p[1] }, { kind: 'dream', sx: p[0], sy: p[1] }]); }, X);
+      await wait(400);
+      res.push(await page.evaluate(() => __s8.drawn()));
+    }
+    const bad = [];
+    for (const d of res) for (const a of d) for (const b of d) if (a !== b && (hit(a.arrow, b.disc) || hit(a.arrow, b.badge))) bad.push([a.kind, b.kind]);
+    const shape = res.map((d) => d.map((b) => b.kind + (b.merged ? '×' : '')).sort().join(','));
+    check('T8.4', 'landscape top edge: a traveller, two wishes (×2) and a dream at one point fan apart with no arrow over another bubble\'s disc or badge, and the ×2 badge under no arrow',
+      bad.length === 0 && res.every((d) => d.length === 3 && d.some((b) => b.kind === 'k-wish' && b.merged && b.badge)), { bad, shape });
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+
+  // -- T8.5, iPhone 13: a wish and a dream at one on-screen roof point (two housemates) show as two bubbles side by side,
+  // each with its own label (on the code before, one 'wish ×2' whose tap never reached the dreamer); two dreams
+  // merged show a readable count pill (the dream's badge had no background)
+  {
+    const { ctx, page, problems } = await game('bp=cottage&nosave=1&town=fresh&townseed=3', { mobile: true });
+    await page.addScriptTag({ content: SYN });
+    await page.evaluate(() => __s8.install());
+    await page.evaluate(() => __s8.set([{ kind: 'wish', sx: 160, sy: 250 }, { kind: 'dream', sx: 160, sy: 250 }]));
+    await wait(400);
+    const a = await page.evaluate(() => __s8.drawn());
+    await page.evaluate(() => __s8.set([{ kind: 'dream', sx: 220, sy: 300 }, { kind: 'dream', sx: 220, sy: 300 }]));
+    await wait(400);
+    const b = await page.evaluate(() => __s8.drawn());
+    check('T8.5', 'a wish and a dream at one on-screen point: two bubbles side by side with their own labels; two dreams merged: a ×2 count on a visible pill',
+      a.length === 2 && a.every((x) => !x.merged && !x.edge) && Math.abs(a[0].x - a[1].x) >= 36 && new Set(a.map((x) => x.label)).size === 2
+      && b.length === 1 && b[0].merged && !!b[0].badge && !/rgba\(0, 0, 0, 0\)|transparent/.test(b[0].badgeBg), { a: a.map((x) => [x.kind, Math.round(x.x), Math.round(x.y), x.label]), b: b.map((x) => [x.kind, x.merged, x.badgeBg]) });
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+  check('T8.x', 'no console errors (repair8)', allProblems.length === 0, allProblems.slice(0, 4));
 });
 
 // ---------------------------------------------------------------- the feel check's must-fixes (M2): asleep the right way round

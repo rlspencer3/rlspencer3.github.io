@@ -387,6 +387,8 @@ export function createHud(app, { root, topLeft, toast, ask } = {}) {
   let occRays = 0;
   const P = { x: 0, y: 0, W: 1, H: 1, behind: false, cx: 0, cy: 0 };
   const seenKinds = new Set();         // kinds that were on screen this session (tips)
+  const fanSide = new Map();           // bubble key → the side (+1 / −1 along its edge) it fanned to last frame
+  let railR = null, railAt = -1;       // the rail's button groups in canvas px (cached ½ s)
   function layoutBubbles(t) {
     const list = call(() => t.bubbles(), []);
     const cam = app.camera, cv = app.renderer?.domElement;
@@ -455,6 +457,12 @@ export function createHud(app, { root, topLeft, toast, ask } = {}) {
       if (shown.length >= BUBBLE_MAX) break;
       const near = it.edge ? shown.find((s) => s.edge && s.b.kind === it.b.kind && Math.hypot(s.edge.x - it.edge.x, s.edge.y - it.edge.y) < EDGE_MERGE_PX)
         : shown.find((s) => !s.edge && Math.hypot(s.x - it.x, s.y - it.y) < MERGE_PX);
+      // on screen, a different kind on one point (a wish and a dream under one roof: two housemates) sits beside it
+      // rather than merging, so both cards can be opened; only when neither side is free does it merge (×N)
+      if (near && !it.edge && near.b.kind !== it.b.kind) {
+        const x = [40, -40].map((dx) => it.x + dx).find((x2) => x2 >= fl + EDGE_IN && x2 <= fr - EDGE_IN && !shown.some((s2) => !s2.edge && Math.hypot(s2.x - x2, s2.y - it.y) < MERGE_PX));
+        if (x !== undefined) { it.x = x; shown.push(it); continue; }
+      }
       if (near) { near.count++; continue; }
       shown.push(it);
     }
@@ -479,24 +487,78 @@ export function createHud(app, { root, topLeft, toast, ask } = {}) {
         if (top < band.bottom && it.y > band.top && it.x + half > band.left && it.x - half < band.right) it.y = Math.min(fb, band.bottom + 46 * s + 4);
       }
     }
-    // edge bubbles of different kinds at one point fan along the edge by a circle (nearest free place first, never
-    // into the toast / checklist band), so each keeps its own tap; their arrows still point at their own targets
+    // Edge bubbles of different kinds at one point fan along their edge (R7 T7.2, R8). The new place is measured from
+    // the bubble in the way: a circle plus whatever part of either arrow reaches along the edge (landscape's top and
+    // bottom edges carry near-level arrows), so a neighbour's arrow never lands on the other's disc or badge. The side
+    // is the one the bubble already leans to, then remembered (fanSide) while that place stays free, and a fanned
+    // bubble only un-fans once 8 px clearer than it needed: it never flips across its neighbour frame to frame. A place
+    // never meets the toast / checklist band or the rail's buttons (a short phone wraps the rail into a second column
+    // inside the free area); when no place is free it merges into the bubble in the way (×N), as before. An edge
+    // bubble whose own place is under the rail or the band slides along its edge to the nearest free place
     {
-      const placed = [], midX = (fl + fr) / 2, halfW = (fr - fl) / 2 - EDGE_PX;
-      const lim = (v, lo, hi) => (hi < lo ? v : Math.min(hi, Math.max(lo, v)));
-      const close = (e) => placed.some((q) => Math.hypot(q.x - e.x, q.y - e.y) < EDGE_MERGE_PX);
-      const inBand = (e) => { if (!band) return false; const x = edgeBox(e); return x.t < band.bottom && x.b > band.top && x.r > band.left && x.l < band.right; };
+      if (now - railAt > 0.5 || !railR) {
+        railAt = now; railR = [];
+        const c = cv.getBoundingClientRect();
+        for (const g of root.querySelectorAll('.hw-rail-group')) {
+          const q = g.getBoundingClientRect();
+          if (q.width > 0 && q.height > 0) railR.push({ left: q.left - c.left - 4, top: q.top - c.top - 4, right: q.right - c.left + 4, bottom: q.bottom - c.top + 4 });
+        }
+      }
+      let bandR = band, bandRead = !!band;
+      const getBand = () => { if (!bandRead) { bandRead = true; bandR = toastBand(cv); } return bandR; };
+      const meets = (e, R) => { const x = edgeBox(e); return x.t < R.bottom && x.b > R.top && x.r > R.left && x.l < R.right; };
+      const blocked = (e) => { const bd = getBand(); return (!!bd && meets(e, bd)) || railR.some((R) => meets(e, R)); };
+      const axis = (e) => (e.side === 'l' || e.side === 'r' ? 'y' : 'x');
+      const reach = (e, ax) => 28 * Math.abs(ax === 'y' ? Math.sin(e.a) : Math.cos(e.a));
+      const gap = (e, q) => EDGE_MERGE_PX + Math.max(reach(e, axis(e)), reach(q, axis(e)));
+      const lo = (ax) => (ax === 'y' ? ft + EDGE_PX : fl + EDGE_PX), hi = (ax) => (ax === 'y' ? fb - EDGE_PX : fr - EDGE_PX);
+      const placed = [], fanned = new Set();
+      const nearOf = (e, extra) => placed.find((p) => Math.hypot(p.e.x - e.x, p.e.y - e.y) < gap(e, p.e) + extra);
+      // a place on a side edge that meets the rail's buttons may instead sit just inside them (its arrow still
+      // points out at its target): on a short phone the wrapped rail column covers most of the right edge
+      const inward = (e) => {
+        if (e.side !== 'r' && e.side !== 'l') return null;
+        const R = railR.find((q) => meets(e, q));
+        if (!R) return null;
+        const x = e.side === 'r' ? R.left - 39 : R.right + 39;
+        return x >= fl + EDGE_PX && x <= fr - EDGE_PX ? { ...e, x } : null;
+      };
+      const ok = (c) => !!c && !nearOf(c, -1) && !blocked(c);        // −1: exactly one gap away is clear
+      const tryAt = (c) => (ok(c) ? c : ((c2) => (ok(c2) ? c2 : null))(inward(c)));
       for (const it of shown) {
         if (!it.edge) continue;
-        if (close(it.edge)) {
-          const side = Math.abs(it.edge.x - midX) >= halfW - 1;   // on the left / right edge: fan up or down
-          for (const d of [EDGE_MERGE_PX, -EDGE_MERGE_PX, 2 * EDGE_MERGE_PX, -2 * EDGE_MERGE_PX]) {
-            const e = side ? { ...it.edge, y: lim(it.edge.y + d, ft + EDGE_PX, fb - EDGE_PX) } : { ...it.edge, x: lim(it.edge.x + d, fl + EDGE_PX, fr - EDGE_PX) };
-            if (!close(e) && !inBand(e)) { it.edge = e; break; }
+        const key = it.b.key, was = fanSide.get(key) || 0, e0 = it.edge, ax = axis(e0);
+        let e = e0;
+        const blk = nearOf(e0, was ? 8 : 0);
+        if (blk) {
+          const base = blk.e[ax], own = e0[ax], mid = ax === 'y' ? (ft + fb) / 2 : (fl + fr) / 2;
+          const lean = was || (own > base ? 1 : own < base ? -1 : mid >= base ? 1 : -1);
+          const g = gap(e0, blk.e);
+          let found = null;
+          for (const [m, d] of [[1, lean], [1, -lean], [2, lean], [2, -lean]]) {
+            const v = base + d * m * g;
+            if (v < lo(ax) - 0.5 || v > hi(ax) + 0.5) continue;      // never clamped back onto the neighbour
+            const c = tryAt({ ...e0, [ax]: v });
+            if (c) { found = c; fanSide.set(key, d); fanned.add(key); break; }
+          }
+          if (!found) { blk.it.count += it.count; it.drop = true; continue; }   // nowhere free: one ×N, as before
+          e = found;
+        } else if (blocked(e0)) {
+          e = tryAt(e0) || e0;                                    // just inside the rail, else along the edge
+          for (let k = 1; k <= 8 && e === e0; k++) {
+            for (const d of [1, -1]) {
+              const v = e0[ax] + d * k * 24;
+              if (v < lo(ax) || v > hi(ax)) continue;
+              const c = tryAt({ ...e0, [ax]: v });
+              if (c) { e = c; break; }
+            }
           }
         }
-        placed.push(it.edge);
+        it.edge = e;
+        placed.push({ e, it });
       }
+      for (const k of [...fanSide.keys()]) if (!fanned.has(k)) fanSide.delete(k);
+      for (let k = shown.length - 1; k >= 0; k--) if (shown[k].drop) shown.splice(k, 1);
     }
     // the move-in nameplate never sits behind the toast stack: below it when the roof anchor is in the toast band
     if (quiet.some((q) => q.b.kind === 'nameplate')) {
@@ -570,8 +632,9 @@ export function createHud(app, { root, topLeft, toast, ask } = {}) {
     if (p.behind) { dx = p.cx; dy = -p.cy; } else { dx = p.x - cx; dy = p.y - cy; }
     if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6) dy = 1;
     const hw = Math.max(10, (fr - fl) / 2 - EDGE_PX), hh = Math.max(10, (fb - ft) / 2 - EDGE_PX);
-    const k = Math.min(hw / Math.max(1e-6, Math.abs(dx)), hh / Math.max(1e-6, Math.abs(dy)));
-    return { x: cx + dx * k, y: cy + dy * k, a: Math.atan2(dy, dx) };
+    const kx = hw / Math.max(1e-6, Math.abs(dx)), ky = hh / Math.max(1e-6, Math.abs(dy)), k = Math.min(kx, ky);
+    // side: the edge it rides ('l' / 'r' / 't' / 'b'), so a fan runs along it and the badge sits on its inner side
+    return { x: cx + dx * k, y: cy + dy * k, a: Math.atan2(dy, dx), side: kx <= ky ? (dx > 0 ? 'r' : 'l') : (dy > 0 ? 'b' : 't') };
   }
 
   /** Occlusion of a villager's head anchor by a piece nearer the camera (4 Hz per bubble, ≤ 2 rays a frame). */
@@ -619,11 +682,15 @@ export function createHud(app, { root, topLeft, toast, ask } = {}) {
       if (r.edge !== true) { r.edge = true; el.classList.add('is-edge'); }
       const deg = (it.edge.a * 180) / Math.PI;
       const ad = Math.round(deg);
-      if (ad !== r.ang) {
-        r.ang = ad; r.arrow.style.transform = `rotate(${ad}deg) translateX(var(--arrow-r, 26px))`;
-        // the ×N badge sits on the far side from the arrow, so the arrow never covers it (css: .is-edge badge)
-        el.style.setProperty('--bx', `${(-Math.cos(it.edge.a) * 21).toFixed(1)}px`);
-        el.style.setProperty('--by', `${(-Math.sin(it.edge.a) * 21).toFixed(1)}px`);
+      if (ad !== r.ang) { r.ang = ad; r.arrow.style.transform = `rotate(${ad}deg) translateX(var(--arrow-r, 26px))`; }
+      // the ×N badge sits on the edge's inner side: the arrow always points out of the edge, and fanned neighbours sit
+      // along it, so neither its own arrow nor a neighbour's ever covers the badge (css: .is-edge badge)
+      const sd = it.edge.side || 't';
+      if (sd !== r.side) {
+        r.side = sd;
+        const [nx, ny] = { l: [1, 0], r: [-1, 0], t: [0, 1], b: [0, -1] }[sd] || [0, 1];
+        el.style.setProperty('--bx', `${nx * 21}px`);
+        el.style.setProperty('--by', `${ny * 21}px`);
       }
       tf = `translate3d(${it.edge.x.toFixed(1)}px,${it.edge.y.toFixed(1)}px,0) translate(-50%,-50%)`;
     } else {

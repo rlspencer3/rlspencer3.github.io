@@ -176,8 +176,11 @@ export function createSim({ save = null, readOnly = false } = {}) {
     const out = new Map();
     if (!world) return out;
     const homes = world.homes;
-    const usable = new Map();                          // home id → bed keys in key order (≤ capacity)
-    for (const h of homes) usable.set(h.id, h.beds.slice(0, h.capacity));
+    const usable = new Map();                          // home id → bed keys (≤ capacity): beds already held first
+    // a bed someone already sleeps in stays usable when a home has more beds than its capacity, so adding a bed to a
+    // full home never takes one away from its resident (in key order alone, a new bed sorting first pushed one out)
+    const held = new Set(villagers.filter((u) => u.status !== 'camping' && u.bed).map((u) => u.bed));
+    for (const h of homes) usable.set(h.id, [...h.beds.filter((k) => held.has(k)), ...h.beds.filter((k) => !held.has(k))].slice(0, h.capacity));
     const claimed = new Set();
     const homeWithBed = (bed) => homes.find((h) => usable.get(h.id).includes(bed));
     // pass 1: keep
@@ -303,12 +306,13 @@ export function createSim({ save = null, readOnly = false } = {}) {
           if (v.plan.kind === 'pose' || v.plan.kind === 'inside') cutPlan(v);
         }
       }
-      // still posed inside the same home with a different bed (or none): book the indoor place again now, so a
-      // sleeper moves to the new bed (or a sofa / bedroll) instead of lying where the old bed was until morning
-      if (v._loc === 'in' && v.plan?.kind === 'inside' && prevHome && v.homeId === prevHome && v.bed !== prevBed) {
+      // still posed inside the same home with a different bed (or none), or resident ↔ waiting there: book the indoor
+      // place again now, so a sleeper moves to the new bed (or a sofa / bedroll) instead of lying where the old bed was
+      // until morning, and goes back to their own bed when it is theirs again (pointed at it first)
+      if (v._loc === 'in' && v.plan?.kind === 'inside' && prevHome && v.homeId === prevHome && (v.bed !== prevBed || v.status !== prev)) {
         const hb = B(v.homeId);
         if (hb) {
-          if (v.plan._kind === 'sleep' && v.status === 'resident' && v.bed) { const [, x, y, z] = v.bed.split('|'); v.plan._spot = `bed|${x}|${y}|${z}`; }
+          if (v.plan._kind === 'sleep' && (v.status === 'resident' || v.status === 'waiting') && v.bed) { const [, x, y, z] = v.bed.split('|'); v.plan._spot = `bed|${x}|${y}|${z}`; }
           recheckInside(v, hb);
         }
       }
@@ -587,7 +591,8 @@ export function createSim({ save = null, readOnly = false } = {}) {
       // only a real bed: a tap of another piece on the bed replaces it in one edit (the sleeper is booked again)
       return bed && bed.t === 'bed' && (!strict || b.cells.has(ck(x, y, z))) ? { bed, x, y, z } : null;
     };
-    if (kind === 'sleep' && v.status === 'resident') {
+    // a resident sleeps in their own bed; so does one waiting for their home to be put right (their bed is still theirs)
+    if (kind === 'sleep' && (v.status === 'resident' || v.status === 'waiting')) {
       const o = bedOf(false);
       if (o) {
         const r = o.bed.r | 0;
