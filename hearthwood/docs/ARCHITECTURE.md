@@ -29,8 +29,15 @@ hearthwood/
   js/audio.js           synthesized sound effects, ambience, generative music
   js/ui.js              all DOM UI
   js/blueprints.js      house templates, guided build mode, stamping
+  js/pieces/gifts.js    the 10 thank-you gift pieces (Living Town; hidden in the tray until unlocked)
+  js/town/              the Living Town (villagers, wishes, Cozy): 14 modules, see "Town" below and docs/LIVING.md
+  css/town.css          all town styling (bubbles, cards, hearth chip)
   tools/shot.mjs        headless screenshot / test runner
-  tools/batch-regress.mjs  static-batching regression test (node tools/batch-regress.mjs, ~6 min, exit 1 on failure)
+  tools/harness.mjs     side-effect-free test harness (server, browser, openGame, injected helpers) shared by the regressions
+  tools/batch-regress.mjs  static-batching regression test (node tools/batch-regress.mjs, ~6 min, exit 1 on failure;
+                        HW_TOWN=1 runs it with the town's logic on: town=fresh&townrender=0)
+  tools/town-regress.mjs   Living Town end-to-end regression (R1–R21 of docs/LIVING.md §13.4; --only=section, --batch)
+  tools/town-brain.js / town-look.js / town-hud.js   per-package acceptance scripts (shot.mjs --script bodies)
   sw.js                 service worker (offline copy, one source per page load) — add every new file to its CORE list
   manifest.webmanifest  install-as-app manifest (start_url / scope / id "./", icons in icons/)
   README.md             how to play, and how to run / test the game
@@ -172,6 +179,10 @@ registerPiece({
   emitter: 'smoke',            // optional: env.js spawns particles (smoke) at the piece
   emitterOffset: [0, 3.2, 0],  // local offset of the emitter (a build() may set userData.emitterOffset on its root
                                // group instead, for a shape-dependent spot: kept by mergeByMaterial, read every frame)
+  smokeAlpha: 1,               // optional: smoke opacity factor (the fire pit's thin wisp is 0.45)
+  hidden: false,               // optional: not offered in the tray (catalog.piecesIn skips it); catalog.setHidden(id, h)
+  gift: { job },               // Living Town gift pieces (js/pieces/gifts.js): the job whose villager gives it, or null
+  walk: 'solid' | 'soft',      // Living Town nav: villagers walk round it (solid) or through it at a cost (soft)
   thumb: { … },                // record overrides used for palette thumbnails
   showcase: { … },             // record overrides used by ?showcase=
   icon: '🪟', desc: 'One-line description', sound: 'wood' | 'stone' | 'soft' | 'glass' | 'metal' | 'leaf',
@@ -217,14 +228,19 @@ Texture UVs are in **meters**. Texture periods: walls 2 m horizontally and 1.25 
 `level`, `rot`, `hOffset`, `drawMode`, `seeAll`, `mats` (matGroup → material id), `colors` (material id → colour),
 `accent`, `paintMat`, `paintColor`, `paintTarget` ('main'|'accent'), `time` (0..1, 0.5 = noon), `timeFlow`,
 `season`, `weather` ('clear'|'rain'|'snow'|'leaves'), `sound`, `music`, `shadows`, `quality` ('low'|'high'|'auto'),
-`photoMode`, `blueprint`, `slot`. Settings persist in localStorage (validated on load; writes debounced to at most one
+`photoMode`, `blueprint`, `slot`, `village` (villagers & wishes on, default true), `chatter` (villager babble, default
+true). Settings persist in localStorage (validated on load; writes debounced to at most one
 per 600 ms and flushed on `pagehide` / hidden; `state.save()` writes now). Replace objects (`mats`, `colors`) — don't mutate.
 
 Event bus `events.emit(type, detail)` / `events.on(type, fn)`:
 * `world-change` {kind: 'add'|'remove'|'clear'|'load'|'undo'|'redo', p, prev, count} (`discardLast()` reports 'undo')
 * `placed` {p, def, replaced}
-* `sfx` {name, flavor} — names: place, replace, remove, paint, rotate, click, undo, level, error, success, open, close, camera, blueprint-step, blueprint-done
-* `toast` {text, kind?: 'info'|'warn'|'success', ms?} — also sent once by storage.js when an autosave can't be written
+* `sfx` {name, flavor, opts?} — names: place, replace, remove, paint, rotate, click, undo, level, error, success, open, close, camera, blueprint-step, blueprint-done,
+  and the town's wish, wish-granted, move-in, gift, villager, hop; `opts` may carry `pitch`, `gain` (0..2) and `pan` (−1..1)
+* `toast` {text, kind?: 'info'|'warn'|'success', ms?, action?: {label, fn}} — also sent once by storage.js when an autosave can't be written;
+  with `action` the toast gets a button (and pointer events)
+* `town-*` events of the Living Town (ready, homes, traveller, movein, wish, granted, expired, gift, cozy, status, fixed,
+  passerby, readonly, savefail, day, showme, showme-end, intro, select, enabled): docs/LIVING.md §12.5
 * `blueprint-progress` {id, done, total, stage, stageName} — `stageName` is the blueprint's own name for it (`bp.stageNames`)
 * `history` {canUndo, canRedo} — after a batch (blueprint stamp, draw stroke), a load or `discardLast()` changes the undo stacks
 * `ready` (app)
@@ -233,7 +249,8 @@ Event bus `events.emit(type, detail)` / `events.on(type, fn)`:
 
 `THREE, scene, camera, renderer, world, rig, builder, effects, state, events, catalog, materials, storage,
 params (URLSearchParams), errors, thumbnail(id, rec) → Promise<dataURL>, snapshot(maxWidth) → dataURL,
-loadBuild(data, {record}), newBuild(), env, audio, ui, blueprints, fps`. `loadBuild` goes through `world.load` (`record: true`
+loadBuild(data, {record}), newBuild(), env, audio, ui, blueprints, town, modules, fps`. `town` is the Living Town's
+TownAPI (see *Town*), or null when its module failed to load; `modules` holds every loaded module by name. `loadBuild` goes through `world.load` (`record: true`
 = one undo step: the UI loads slots and share codes that way) and resets the floor view; it eases to `data.cam`, and data
 without one (share codes) gets a view framing the build — its house, garden scenery aside — in the part of the screen
 the UI leaves free (`rig.insets`).
@@ -243,7 +260,9 @@ Feature modules export `init(app)` returning an object (optionally with `update(
   Shadow maps are cached (`renderer.shadowMap.autoUpdate = false`): env re-renders them on world changes, effect
   tweens, light movement and every 12 frames. Anything else that animates shadow-casting objects should set
   `renderer.shadowMap.needsUpdate = true`.
-* `audio.js` → `{ update(dt) }` — listens to `sfx` events and state.
+* `audio.js` → `{ update(dt), play, unlock, render(name, opts), context, stats() }` — listens to `sfx` events and
+  state. Ambience reads villager chatter (talkers, only while `state.chatter`) and work foley from
+  `app.town.audible()`; `stats()` and the offline `render()` are for tests.
 * `blueprints.js` → `{ list(), get(id), startGuided(id), stop(), stamp(id, {animate, record}), welcome(), update(dt), active(),
   selectNext({focus, quiet}), progress(), stages }`. `get(id)` → `{ id, name, emoji, desc, difficulty, style, cam, pieces,
   count, stageNames }`: `stageNames` (stage id → name) names each stage after what that blueprint puts in it ("Roof" vs
@@ -254,7 +273,8 @@ Feature modules export `init(app)` returning an object (optionally with `update(
   An animated stamp keeps waiting pieces at scale 0.001 with their inner group (`entry.obj.children[0]`) hidden until
   their pop-in (no draw calls; `entry.obj.visible` stays the level cutaway's). In guided mode `selectNext` turns the
   camera to face a piece that is on the far side of the house.
-* `ui.js` → `{ update(dt), toast, open(page), close, showWelcome, ask }`.
+* `ui.js` → `{ update(dt), toast, open(page), close, showWelcome, ask, hud }` (`hud`: the town's hud, read-only, null
+  without the town). `toast(text, kind, ms, action)`: with `action: { label, fn }` the toast gets a button.
   * Photo mode sets `state.seeAll = true` on entry and restores the saved `{level, seeAll}` on exit. It changes
     `seeAll` without moving the camera: it keeps `rig.goal.target.y` across the change, which the builder's floor view
     (`_applyLevel`) would otherwise reset to the floor height; the builder's V key does the same while in photo
@@ -423,6 +443,95 @@ A railing (not a garden piece) gets no fallback: unsupported upstairs, it shows 
 * A placed piece whose cutaway level is above the current cutaway turns `seeAll` on ('👁️ Showing every floor…').
 * The build grid is unlit: it fades (opacity 0.28 → ×(1 − 0.55·night)) and tints moonlit blue with `env.night`.
 
+## Town (js/town/, `app.town`)
+
+The Living Town (villagers with move-in recipes, wishes, day/night routines, the Cozy meter, thank-you gifts). The full
+design and every contract are in **docs/LIVING.md** (§12.3 data contracts, §12.4 module APIs, §12.5 events, §12.9
+persistence, §12.12 params, §12.13 debug API); this is the short map.
+
+| File | Part | Role | Imports |
+|---|---|---|---|
+| `js/town/data.js` | brain | `TUNE` (every tuning number, LIVING.md §15), jobs, traits, names, lines, sets, spot defs, `GIFTS`, keys; every user-visible string the brain needs | nothing |
+| `js/town/rng.js` | brain | seeded RNG (mulberry32) and hashing | nothing |
+| `js/town/homes.js` | brain | world index, buildings and homes (§3: rooms, doors, beds, the one forgiven flaw), names, footprints | config, data |
+| `js/town/nav.js` | brain | 22 × 22 cell nav grid with edge masks, A*, string pulling, regions (§6) | config, data, homes, rng |
+| `js/town/recipes.js` | brain | job recipes, missing items, charm, hangout spots | config, data, homes |
+| `js/town/wishes.js` | brain | the 43 wish templates, eligibility, completion, the spot finder Show me uses | config, data, homes, recipes |
+| `js/town/model.js` | brain | `buildWorldModel()`: index → buildings → nav → spots in one call | config, data, homes, nav, recipes |
+| `js/town/sim.js` | brain | the deterministic town (fixed 0.25 s ticks): roster, status, schedule, plans, arrivals, wishes, Cozy, gifts | config, data, rng, homes, recipes, wishes, store |
+| `js/town/store.js` | brain | the save: fresh, `sanitizeTown` (never throws), load, save, the unlocks mirror | data |
+| `js/town/look.js` | body | procedural villager, tent and lantern geometry; the one patched shared material; glyph atlas | three, BufferGeometryUtils |
+| `js/town/render.js` | body | instanced meshes, blob shadows, light spill, FX points, the camp, the Show me highlight, the nav overlay | three, materials, look |
+| `js/town/actors.js` | body | presentation: interpolates the sim's plans, poses, steering, cues, hit test (the only body API index.js uses) | three, look, render |
+| `js/town/hud.js` | face | bubbles, villager / town / hint / gift cards, the hearth chip, the Show me checklist, every town toast (DOM) | nothing (reads `app.town`) |
+| `js/town/index.js` | wiring | `init(app)` → `app.town` (the TownAPI): params, clocks, recompute scheduling, input, Show me, events, persistence, debug | the other town modules except hud.js, by dynamic `import()` at boot (none with `town=0` or a showcase) |
+| `js/pieces/gifts.js` | pieces | the 10 gift pieces, registered hidden; un-hides the unlocked ones at registration | three, catalog, materials, geom, config, town/data |
+| `css/town.css` | face | all town styling | — |
+
+* **Boot.** main.js loads `gifts` with the other piece modules (gift pieces always register, villagers on or off),
+  then `app.town = await loadModule('town', './town/index.js')` after blueprints and before ui (loading text
+  *Waking the village…*). index.js imports the other town modules at boot; a missing module or export turns the town
+  off for the session with one `console.error` (`debug.parts()` reports which). The body compiles its shaders behind
+  the loading screen, so the first villager drawn adds no shader program. The first recompute runs on `ready`, after
+  the autosave restore, as a silent restore (no events, toasts or walks); `app.town.ready` turns true then. ui.js
+  mounts the hud after first paint (`import('./town/hud.js')`, only when `app.town` exists) and exposes it as `ui.hud`.
+* **Each frame.** main.js calls `app.town.update(dt)` inside a try/catch (a throw nulls `update` and is reported).
+  The town clock advances in fixed 0.25 s ticks only while the page is visible, villagers are on and `ready` is true;
+  presentation interpolates between ticks. A recompute (`buildWorldModel` + re-binding + wish checks) runs 0.3 s after
+  the last `world-change`, at most twice a second.
+* **TownAPI** (LIVING.md §12.4): `ready`, `enabled()`, `clock()`, `day()`, `cozy()`, `view()` (cached, ≤ 4×/s),
+  `villager(id)`, `bubbles()` (world anchors; the hud projects them), `giftInfo(pieceId)`, `tipOnce(id)`, `audible()`
+  (audio.js reads talkers and foley from it), `hitTest(sx, sy, pad)`, `showMe(target)`, `showing()`, `endShowMe()`,
+  `muteHint(homeId)`, `answerIntro(lovely)`, `follow(id)`, `focusHome(homeId)`, `update(dt)`, `debug` (§12.13). Every
+  entry point is guarded: a town failure turns villagers off for the session (one `console.error`) and building carries
+  on.
+* **Input.** index.js wraps `rig.onTap` / `rig.onPress` / `rig.onAimEnd`; builder.js is untouched. With the Build tool
+  only a tap on a villager's body selects them (a tap beside them builds), and a tap on a Show me ring or ghost always
+  places the piece exactly there. Erase / Paint / Pick taps on a villager open their card and change nothing.
+  camera.js is untouched too: while **Follow** is on, index.js gives the rig instance thin wrappers (`_zoomAbout`,
+  `_turnAbout`, `_grab`, `_reanchor`, `_initMulti`) so a pinch zooms and a twist turns round the followed villager and
+  only a real two-finger slide (or a pan / wheel zoom) lets go (LIVING.md §12.7). Show me frames its spot with a few
+  `world.pick` occlusion rays (a `THREE.Raycaster` from candidate camera positions), so a wall or a pine never hides it.
+* **Drawing.** Everything the town draws lives in **one `THREE.Group` named `'town'`** added to the scene: never inside
+  `world.root`, layer 0 only (never layers 1 / 2), no shadow-map casting, never animated through `effects` tweens, and
+  the town never sets `renderer.shadowMap.needsUpdate`. Budget: ≤ 14 extra draw calls with 20 villagers (≤ 20 with a
+  Show me highlight: its ghost is the piece baked into one mesh, so it costs one call whatever the piece), ≤ 20k
+  triangles (plus the ghost piece's own while a highlight is up). Indoor villagers on levels the cutaway hides are hidden; `world.pick` never sees
+  villagers. Photo mode keeps villagers and hides bubbles, cards, the highlight and follow.
+* **The world is read-only to the town.** It never writes pieces, undo stacks or build saves; it reacts to
+  `world-change`. Undo never takes back a granted wish, Warmth, a gift or an unlock. Nobody is ever evicted: a broken
+  home makes its residents wait, then move to a free bed, then camp by the lane (each after 3 s of a quiet world).
+* **Persistence** (LIVING.md §12.9). One device-level key `hearthwood.town.v1` (`v: 1`, ≤ 8 KB for 20 villagers; slots,
+  share codes and a clear never touch it) plus the tiny mirror `hearthwood.unlocks.v1` (a JSON array of unlocked gift
+  ids, written first and at once on an unlock). Writes: 2 s after a town change, every 30 s of town clock, and on
+  `pagehide` / hidden; never with `?nosave=1`, a showcase, `town=0`, `town=fresh` or a read-only save. When another tab
+  writes the key (`storage` event) this tab goes read-only for the session with a Reload toast. A save with a newer `v`
+  loads read-only. The town clock never runs while the page is hidden: nothing advances offline.
+* **State keys** `village` (Villagers & wishes, default true) and `chatter` (default true), both persisted.
+  `timeFlow` now defaults to true (LIVING.md §0.4): an existing player is switched to it once, on the first run with
+  the town, with a toast; after that the game never changes `timeFlow` except through the player's own tap.
+* **Gift pieces** (`js/pieces/gifts.js`) are ordinary batched decor-like pieces: `gift: { job }`, `walk: 'solid'|'soft'`,
+  `hidden: true` until unlocked (read from both keys at registration, so an unlock survives the town failing to load;
+  even reading `localStorage` is guarded, so blocked site data never stops the gifts registering);
+  `catalog.setHidden(id, hidden)` un-hides one. `world.validate` ignores `hidden`, so saves, share codes and Pick always
+  work with gift pieces. They add no material (the `mat()` cache is unchanged).
+* **Other core hooks.** env.js exports `LANE` and `DAY_SECONDS` (the town reads them through `app.modules.env`); a
+  smoke emitter's def may set `smokeAlpha` (default 1) for a thinner wisp (the fire pit); env.js lets the dusk linger
+  (17:45–20:10 sunset into blue dusk; every time preset looks as before). blueprints.js: with villagers on and drawn, a
+  "Place it instantly" stamp ends with the finishing glide, framing the garden too (pull-back capped at ×1.15).
+  main.js's autosave never overwrites a restored build that dropped unknown pieces with a camera-only flush.
+* **Events.** `town-ready`, `-homes`, `-traveller`, `-movein`, `-wish`, `-granted`, `-expired`, `-gift`, `-cozy`,
+  `-status`, `-fixed`, `-passerby`, `-readonly`, `-savefail`, `-day`, `-showme`, `-showme-end`, `-intro`, `-select`,
+  `-enabled` (payloads in LIVING.md §12.5; every one is logged with `townlog=1`). index.js also sends `sfx` (`wish`,
+  `wish-granted`, `move-in`, `gift`, `hop`, with `pan` / `gain`) and `toast` (with `action` for buttons such as
+  👀 Watch and Reload); the hud sends `villager` on card open.
+* **URL params** (validated; malformed values are ignored): `town=0|1|fresh`, `townrender=0`, `townseed=n`,
+  `townspeed=n`, `spawn=jobs|n`, `wish=<tpl>`, `cozy=n`, `unlock=all|ids`, `townnav=1`, `townhud=1`, `townlog=1`
+  (LIVING.md §12.12). `town=0` and showcases load index.js but import nothing else, leave the rig unwrapped and draw
+  nothing; `unlock` still applies.
+* **Tests.** `tools/town-regress.mjs` (R1–R21, end to end), and the package scripts `tools/town-brain.js` (B1–B12),
+  `tools/town-look.js` (L1–L11) and `tools/town-hud.js` (H1–H15), run through `shot.mjs --script` (LIVING.md §13.4).
+
 ## Offline & install (sw.js, manifest.webmanifest)
 
 main.js registers `./sw.js` on https only (local dev servers stay worker-free). The worker's scope is its folder, so the
@@ -457,6 +566,8 @@ game works from any subpath (GitHub Pages: `/hearthwood/`); the manifest's `star
 * `node tools/shot.mjs --query "showcase=walls&ui=0" --out /path/shot.png [--w 1280 --h 800] [--mobile] [--cam …]
   [--eval "js"] [--script file.js] [--wait ms] [--mobile --landscape]` — serves the game, screenshots it, prints console errors, piece count,
   draw calls & triangles. `--script` bodies run inside an async function in the page and may `return` a value.
+* With more than 100 pieces (`?showcase=all` holds 106: 96 + the 10 gifts) the contact sheet's last row sits just past
+  the lot's front edge (z = 11).
 * `node tools/batch-regress.mjs` — static-batching regression, 48 checks (stamp/erase/paint/undo/levels/pick/touch,
   mid-cascade invariants, batched vs unbatched pixel comparison, draw-call ratio). Exits 1 on failure. `HW_ROOT=…` tests
   another checkout.

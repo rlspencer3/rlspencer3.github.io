@@ -11,7 +11,7 @@ Play it at **https://rlspencer3.github.io/hearthwood/** (or run it locally, see 
 - [Playing with a mouse and keyboard](#playing-with-a-mouse-and-keyboard)
 - [Tools](#tools) · [Floors](#floors) · [Roofs and gables](#roofs-and-gables)
 - [Pieces](#pieces) · [Building styles](#building-styles) · [Blueprints and guided building](#blueprints-and-guided-building)
-- [Saving, share codes and photos](#saving-share-codes-and-photos) · [Settings](#settings) · [Install and play offline](#install-and-play-offline)
+- [Villagers](#villagers) · [Saving, share codes and photos](#saving-share-codes-and-photos) · [Settings](#settings) · [Install and play offline](#install-and-play-offline)
 - [For developers](#for-developers)
 
 ## The screen
@@ -42,6 +42,8 @@ Play it at **https://rlspencer3.github.io/hearthwood/** (or run it locally, see 
 - Long-press a piece card (or tap its ⓘ) to read about it: where it goes, how many materials, whether it can be
   painted, which floors it fits. **Use this piece** picks it up.
 - Swipe the menu's header down to close it.
+- Tap a villager (or the bubble over them) to open their card. With a piece in hand only a tap right on them
+  does that, so you can build close beside them.
 - Your phone gives a tiny buzz when a piece lands (where the browser allows it).
 - A few gentle tips show up once each: tapping several walls one by one suggests Draw mode, and undoing a tap
   right away suggests press-and-hold.
@@ -75,7 +77,9 @@ Play it at **https://rlspencer3.github.io/hearthwood/** (or run it locally, see 
 | Ctrl (⌘) + Shift + Z, Ctrl (⌘) + Y | Redo |
 | M | Open / close the menu |
 | H or ? | How to play |
-| Esc | Close whatever is open (dialog, popover, menu, welcome card, photo mode) and go back to Build |
+| T | The town card (Cozy, neighbours, wishes, who could move in) |
+| J | **Show me** the next open wish (the camera turns to its glowing spot and the piece is in your hand) |
+| Esc | Close whatever is open (a villager or town card first, then dialog, popover, menu, welcome card, photo mode), end a **Show me**, and go back to Build |
 | Enter or Space on a piece card | Pick it up |
 
 Keys do nothing while you are typing in a text box (the build name, a share code).
@@ -141,7 +145,8 @@ see inside, unless you're holding a garden piece or a path. The rail's **All / C
 
 ## Pieces
 
-96 pieces in seven categories. Most come in several materials. Long-press a card to see which.
+96 pieces in seven categories, plus 10 thank-you gifts the villagers give you (they appear in 🌷 Garden once
+unlocked). Most come in several materials. Long-press a card to see which.
 
 | Category | Pieces |
 |---|---|
@@ -222,6 +227,51 @@ Open **Menu → Blueprints** and pick a house.
 - If your meadow isn't empty you can **Clear & start** or **Keep my build**. On your first visit the meadow has a
   few trees, a bench, a path, a mailbox and a lamp. That scenery isn't your build, so it's cleared without asking.
 
+## Villagers
+
+Build a home and someone may move in. A **home** is a room with walls, a roof, a way in (a door, or just an open
+doorway) and a bed; one gap in the walls or one hole in the roof is forgiven. A few seconds after your first home
+qualifies, a traveller comes up the lane, knocks, and the windows light up: they live there now, one per bed (up to 4
+a house, 20 in all).
+
+* **Jobs.** Eight villagers: the Gardener (flowers round the house), Farmer (vegetable beds, hay, chickens),
+  Woodcutter (a woodpile and trees), Fisher (a lily pond), Beekeeper (a hive among flowers), Baker (a kitchen inside
+  and a bench or table by the door), Lamplighter (lamp posts) and Postie (a mailbox and a second home). What you put
+  round a house decides who comes; the town card lists who could move in and what each would need. The very first
+  home always gets someone, recipe or not.
+* **Days.** Villagers wake, work, take breaks, visit each other, gather by the fire pit in the evening, go home and
+  sleep; somebody is usually out with a lantern at night. Leave the day passing (the default) to watch it all, or pin
+  the time in Settings and they keep busy within that hour. Peek inside with the cutaway: they really are in bed.
+* **Wishes.** Now and then a villager would love something: a bench by the door, an apple tree, a fire to gather
+  round. Tap the bubble, then **📍 Show me**: the camera turns to the spot, it glows, and the piece is in your hand, so
+  one more tap places it exactly there. Wishes never expire with a penalty and never count down; one you ignore just
+  fades with a smile.
+* **Cozy.** The 🔥 hearth in the top bar glows brighter as the town gets cosier: granted wishes and new
+  neighbours add warmth, and every different kind of decor round the homes adds charm. Tap it (or press T) for the
+  town card.
+* **Thank-you gifts.** Every few granted wishes a villager leaves you a gift piece (a flower cart, a hen house, a
+  carved bear, a tea table…). It stays in your tray for good, villagers on or off.
+* **Almost a home.** A building with walls, a roof and a way in but no bed gets a grey 🛏️ bubble for a minute; its
+  card has **Show me** (a glowing bed spot) and **Just a shed 🙂**, which stops the hints for that building. Small
+  sheds (6 cells or fewer) never get one, but anything with a bed in it does, however small. Walls straight on the
+  grass work, and so does an open doorway instead of a door: one missing wall or roof panel is forgiven. Once you
+  place what a hint asked for, its glowing spot goes away. A later home that no recipe fits shows a green 🏡✨ bubble
+  with the closest jobs and what each would need (not while someone camping is about to take that bed).
+* **Watching.** A toast with **👀 Watch** follows the traveller up the lane; tap a villager to see their name, job,
+  trait and wish, and **👀 Follow** to keep the camera on them: pinch, twist and orbit keep following, a two-finger
+  slide (or a pan) lets go. While a guided blueprint is unfinished, arrivals and new wishes wait (bubbles dim) and the first one
+  comes when the house is done. Photo mode keeps the villagers in your picture and hides the bubbles.
+* **Never lost.** Knock a roof off, clear the meadow or load another build: nobody is ever evicted. They wait in the
+  broken house, move to a free bed, or camp in a tent by the lane until there's a bed again, and they remember the
+  houses they lived in. Undo never takes a gift or a granted wish back.
+* **A quiet meadow.** Menu → Settings → **Villagers & wishes** off gives the build-only game, exactly as before;
+  nothing is lost and they come back when you switch it on.
+
+One village lives on each device (it follows you between your saved builds and share codes). If you were already
+building before villagers came, a one-time card asks first: **Lovely** or **Keep my meadow quiet**. The day now
+passes by default so you can watch village life (a player who had pinned the time is switched once, with a note; pin
+it again in Settings and it stays pinned). The full design is in [docs/LIVING.md](docs/LIVING.md).
+
 ## Saving, share codes and photos
 
 - **Autosave:** your build saves itself a moment after every change, and again when you switch away or close the
@@ -248,12 +298,14 @@ Menu → Settings. These are remembered between visits.
 
 | Setting | Choices |
 |---|---|
-| Time of day | A slider and Dawn / Morning / Noon / Sunset / Night. **Let the day pass** runs a whole day in 10 minutes. At night the windows, lamps and fires glow and the build grid dims. |
+| Time of day | A slider and Dawn / Morning / Noon / Sunset / Night (a preset pins the time). **Let the day pass** (on by default) runs a whole day in 10 minutes, with a long golden dusk. At night the windows, lamps and fires glow and the build grid dims. |
 | Season | Spring, Summer, Autumn, Winter. The leaves and grass change, and winter puts snow on the roofs. |
 | Weather | Clear, Rain, Snow, Breezy (falling leaves) |
 | Sound effects | Building sounds plus the meadow's ambience: wind, birds by day, crickets and owls at night, rain, a crackle near a fireplace, stove or fire pit, frogs by the pond at night |
 | Music | A gentle generated kalimba and music-box tune over warm chords, slower and softer at night |
 | Soft shadows | On / off |
+| Villagers & wishes | On (the default) or off for a quiet build-only meadow; nothing is lost |
+| Villager chatter | The villagers' little babble when you are near them, on or off |
 | Quality | Low (screen resolution, less scenery), Auto (picks for your device), High (sharpest). Antialiasing changes apply the next time the game loads. |
 
 All sound is made live in the browser, so there are no audio files. It starts after your first tap, as browsers
@@ -295,7 +347,7 @@ hearthwood/
   index.html             import map ("three", "three/addons/") → js/main.js
   manifest.webmanifest   install-as-app manifest (icons in icons/)
   sw.js                  service worker: offline copy of every file the game loads (its CORE list)
-  css/                   style.css (loading screen), ui.css (all UI styling)
+  css/                   style.css (loading screen), ui.css (all UI styling), town.css (villager bubbles, cards, hearth)
   js/main.js             bootstrap, render loop, autosave, dev params, showcase
   js/config.js           grid & units, slot keys          js/state.js     state + event bus
   js/catalog.js          piece registry                   js/geom.js      cached geometry
@@ -303,13 +355,16 @@ hearthwood/
   js/batcher.js          static batching                  js/camera.js    orbit camera + gestures
   js/builder.js          placement, tools, auto-roof      js/effects.js   pop-ins, dust, sparkles
   js/storage.js          saves, slots, share codes        js/thumbs.js    piece card pictures
-  js/pieces/             floors.js, walls.js, roof.js, decor.js (every piece, via registerPiece)
+  js/pieces/             floors.js, walls.js, roof.js, decor.js, gifts.js (every piece, via registerPiece)
+  js/town/               the Living Town: villagers, homes, nav, wishes, Cozy (index.js wires it in; see docs/LIVING.md)
   js/env.js              sky, light, meadow, seasons, weather
   js/audio.js            sound effects, ambience, music
   js/ui.js               all DOM UI
   js/blueprints.js       blueprints, guided building, the welcome lot
   js/vendor/             three.module.min.js + addons/BufferGeometryUtils.js (three.js r187)
-  tools/                 shot.mjs (screenshots / tests), batch-regress.mjs (batching regression)
+  tools/                 shot.mjs (screenshots / tests), harness.mjs (shared test harness), batch-regress.mjs (batching
+                         regression), town-regress.mjs (village regression), town-brain.js / town-look.js / town-hud.js
+  docs/LIVING.md         the Living Town design spec and its module contracts
   docs/ARCHITECTURE.md   the contract between modules
 ```
 
@@ -355,7 +410,15 @@ as `'/js/catalog.js'`.
 `node tools/batch-regress.mjs` runs the 48-check static-batching regression in about 6 minutes: stamping, erasing,
 painting, undo, floors, picking, touch, batched vs. unbatched pixels, and invariants in the middle of a blueprint
 cascade. It exits 1 on any failure. Set `HW_ROOT=/path/to/hearthwood` to test another checkout. Run it after touching
-`world.js`, `batcher.js`, `main.js`, `effects.js` or `blueprints.js`.
+`world.js`, `batcher.js`, `main.js`, `effects.js` or `blueprints.js`. `HW_TOWN=1 node tools/batch-regress.mjs` runs it
+with the village's logic on (`town=fresh&townrender=0`).
+
+`node tools/town-regress.mjs` runs the village regression (R1–R21 of docs/LIVING.md §13.4: homes, arrivals, Show me,
+gifts, guided mode, photo mode, persistence, two tabs, never evicted, never stuck, the draw-call budget…, plus the
+`repair1` and `repair2` sections' real-touch checks) in 10 to 30
+minutes, depending on the machine, and exits 1 on any failure; `--only=showme,gifts` runs some sections, `--batch`
+adds both batch-regress runs. The per-package checks run as `shot.mjs` scripts: `--script tools/town-brain.js` (the brain),
+`tools/town-look.js` (the villagers' look) and `tools/town-hud.js` (bubbles and cards).
 
 ### URL parameters
 
@@ -378,5 +441,10 @@ cascade. It exits 1 on any failure. Set `HW_ROOT=/path/to/hearthwood` to test an
 | `batch=0` | Static batching off (for A/B checks) |
 | `batchsize=n` | Shadow-region edge in cells, 1..20 (default 8) |
 | `batchglass=1` | Also merge glass into batches |
+| `town=0\|1\|fresh` | Villagers off / on for this load, or a fresh village in memory (the saved one is untouched) |
+| `townseed=n`, `townspeed=n` | Seed of a fresh village; town clock ×n (1..120, the sky too while the day passes) |
+| `spawn=gardener,baker` / `spawn=n` | Villagers moved straight into free beds (else they camp) |
+| `wish=<template>`, `cozy=n`, `unlock=all\|ids` | The first villager's wish; Cozy ≈ n; gifts unlocked for this load |
+| `townnav=1`, `townhud=1`, `townlog=1`, `townrender=0` | Nav overlay; dev HUD; log town events; run the village without drawing it |
 
 Malformed values are ignored. The welcome card never shows on URLs with `showcase`, `bp`, `clean` or `cam`.

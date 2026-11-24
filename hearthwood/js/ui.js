@@ -207,6 +207,10 @@ export function init(app) {
 
   const sfx = (name) => events.emit('sfx', { name });
   const getDef = (id) => catalog.getDef(id);
+  let townHud = null;        // the town's face (js/town/hud.js), mounted after first paint when app.town exists
+  /** The town's word on a gift piece: { from, isNew } or null (no town, or not a gift). */
+  const giftInfo = (id) => { try { return app.town?.giftInfo?.(id) || null; } catch { return null; } };
+  let giftDot = false;       // a gift was unlocked: the Garden tab shows a dot until it is opened
   const curDef = () => getDef(state.pieceId);
 
   /** A button that plays a click and runs fn. */
@@ -331,16 +335,22 @@ export function init(app) {
 
   let collapsed = lsGet(LS_TRAY) === '1';
   handle.addEventListener('click', () => setCollapsed(!collapsed));
+  /** The handle says what a tap does: also right after a reload with the tray restored collapsed. */
+  const labelHandle = () => {
+    handle.setAttribute('aria-label', collapsed ? 'Show pieces' : 'Hide pieces');
+    handle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  };
   function setCollapsed(v, sound = true) {
     collapsed = v;
     lsSet(LS_TRAY, v ? '1' : '0');
     tray.classList.toggle('is-collapsed', v);
-    handle.setAttribute('aria-label', v ? 'Show pieces' : 'Hide pieces');
+    labelHandle();
     if (sound) sfx(v ? 'close' : 'open');
     closePop();
     renderCtx();
   }
   tray.classList.toggle('is-collapsed', collapsed);
+  labelHandle();
 
   // keep the rail & popovers clear of the tray
   const syncTrayH = () => {
@@ -384,7 +394,8 @@ export function init(app) {
       const n = catalog.piecesIn(cat.id).length;
       if (!n) continue;
       const short = SHORT_CAT[cat.id] || cat.name.split(/[ &]/)[0];
-      const b = btn('hw-tab', cat.name, [h('span', { class: 'hw-tab-ic' }, cat.icon), h('span', { class: 'hw-tab-lb' }, short), h('span', { class: 'hw-tab-full' }, cat.name)], () => {
+      const b = btn('hw-tab', cat.name, [h('span', { class: 'hw-tab-ic' }, cat.icon), h('span', { class: 'hw-tab-lb' }, short), h('span', { class: 'hw-tab-full' }, cat.name),
+        cat.id === 'garden' && giftDot ? h('span', { class: 'hw-tab-dot', 'aria-hidden': 'true' }) : null], () => {
         openCategory(cat.id);
       }, { title: cat.name, attrs: { role: 'tab', 'data-cat': cat.id } });
       tabEls.set(cat.id, b);
@@ -416,13 +427,27 @@ export function init(app) {
     catIc.textContent = cat?.icon || '🧺';
     catLb.textContent = cat ? (SHORT_CAT[cat.id] || cat.name.split(/[ &]/)[0]) : 'Pieces';
     catBtn.setAttribute('aria-label', cat ? `${cat.name} — pick a category` : 'Piece categories');
+    const dot = catBtn.querySelector('.hw-tab-dot');
+    if (giftDot && state.category !== 'garden') { if (!dot) catBtn.append(h('span', { class: 'hw-tab-dot', 'aria-hidden': 'true' })); }
+    else dot?.remove();
+  }
+  /** Opening the Garden tab clears the new-gift dot. */
+  function seenGarden() {
+    if (!giftDot || state.category !== 'garden') return;
+    giftDot = false;
+    for (const d of root.querySelectorAll('.hw-tab-dot')) d.remove();
+  }
+  /** The 🎁 New ribbon on gift cards the player hasn't placed yet. */
+  function markGifts() {
+    for (const c of cardEls.values()) c.el.classList.toggle('hw-card-gift', !!(c.def.gift && giftInfo(c.def.id)?.isNew));
   }
   function openCatPicker() {
     const grid = h('div', { class: 'hw-catpick', role: 'group', 'aria-label': 'Piece categories' });
     for (const cat of catalog.CATEGORIES) {
       if (!catalog.piecesIn(cat.id).length) continue;
       const on = cat.id === state.category;
-      grid.append(btn('hw-catopt' + (on ? ' is-on' : ''), cat.name, [h('span', { class: 'hw-tab-ic' }, cat.icon), h('span', { class: 'hw-catopt-lb' }, SHORT_CAT[cat.id] || cat.name.split(/[ &]/)[0])], () => {
+      grid.append(btn('hw-catopt' + (on ? ' is-on' : ''), cat.name, [h('span', { class: 'hw-tab-ic' }, cat.icon), h('span', { class: 'hw-catopt-lb' }, SHORT_CAT[cat.id] || cat.name.split(/[ &]/)[0]),
+        cat.id === 'garden' && giftDot ? h('span', { class: 'hw-tab-dot', 'aria-hidden': 'true' }) : null], () => {
         closePop();
         openCategory(cat.id);
       }, { title: cat.name, attrs: { 'data-cat': cat.id, 'aria-pressed': String(on) } }));
@@ -471,6 +496,7 @@ export function init(app) {
         class: 'hw-card', role: 'option', tabindex: '0', 'data-id': def.id, title: def.desc || def.name,
       }, h('span', { class: 'hw-card-thumb' }, h('span', { class: 'hw-card-emoji' }, def.icon || '◻️'), img), h('span', { class: 'hw-card-name' }, def.name), info);
       const card = { el, img, def, key: null };
+      if (def.gift && giftInfo(def.id)?.isNew) el.classList.add('hw-card-gift');
       cardEls.set(def.id, card);
       wireCard(card, info);
       cards.append(el);
@@ -910,10 +936,12 @@ export function init(app) {
     const img = h('img', { alt: '' });
     const thumb = h('span', { class: 'hw-info-thumb' }, h('span', { class: 'hw-card-emoji' }, def.icon || '◻️'), img);
     app.thumbnail?.(def.id, thumbRec(def))?.then?.((u) => { if (u) { img.src = u; thumb.classList.add('has-img'); } }, () => {});
+    const gi = def.gift ? giftInfo(def.id) : null;
     const body = h('div', { class: 'hw-info' }, thumb,
       h('div', { class: 'hw-info-tx' },
         h('b', null, def.name),
         h('p', null, def.desc || 'A lovely piece for your home.'),
+        gi?.from ? h('p', { class: 'hw-info-gift' }, `🎁 A thank-you from ${gi.from}`) : null,
         h('div', { class: 'hw-tags' }, tags.map((t) => h('span', null, t))),
         state.pieceId !== def.id ? btn('hw-pill hw-pill-primary hw-info-use', `Use ${def.name}`, h('span', null, 'Use this piece'), () => { builder.selectPiece(def.id); closePop(); }) : null));
     showPop(anchor, body, 'hw-pop-info');
@@ -933,7 +961,8 @@ export function init(app) {
   if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => syncInsets()).observe(hud);
 
   const live = new Map(); // text -> { el, timer }
-  function toast(text, kind = 'info', ms = 2400) {
+  /** A toast; with `action: { label, fn }` it carries a button (and takes taps: .has-act has pointer events). */
+  function toast(text, kind = 'info', ms = 2400, action = null) {
     if (!text) return;
     const existing = live.get(text);
     if (existing) {
@@ -942,7 +971,20 @@ export function init(app) {
       existing.timer = setTimeout(() => dropToast(text), ms);
       return;
     }
-    const el = h('div', { class: `hw-toast is-${kind}` }, text);
+    const act = action && typeof action.fn === 'function' && action.label
+      ? h('button', {
+        type: 'button', class: 'hw-toast-act', 'aria-label': String(action.label),
+        onclick: (e) => {
+          e.stopPropagation();
+          sfx('click');
+          dropToast(text);
+          try { action.fn(); } catch (err) { console.error('[ui] toast action', err); }
+        },
+      }, String(action.label))
+      : null;
+    const el = act
+      ? h('div', { class: `hw-toast is-${kind} has-act` }, h('span', null, text), act)
+      : h('div', { class: `hw-toast is-${kind}` }, text);
     toasts.append(el);
     requestAnimationFrame(() => el.classList.add('in'));
     const rec = { el, timer: setTimeout(() => dropToast(text), ms) };
@@ -1117,16 +1159,34 @@ export function init(app) {
       { id: 'help', icon: '🧭', title: 'How to play', sub: 'Gestures & shortcuts', fn: () => goPage('help') },
     ];
     const n = world.count;
+    const town = townTile();
     return h('div', { class: 'hw-page hw-page-main' },
       h('div', { class: 'hw-hero' },
         h('div', { class: 'hw-hero-house', html: HOUSE_SVG }),
         h('div', null,
           h('b', null, n ? `Your home has ${n} piece${n === 1 ? '' : 's'}` : 'Your meadow is waiting'),
           h('small', null, n ? 'Every board placed with love.' : 'Start with a foundation, then walls and a roof.'))),
-      h('div', { class: 'hw-tiles' }, tiles.map((t) => btn(`hw-tile hw-tile-${t.id}`, t.title, [
+      h('div', { class: 'hw-tiles' }, town, tiles.map((t) => btn(`hw-tile hw-tile-${t.id}`, t.title, [
         h('span', { class: 'hw-tile-ic' }, t.icon),
         h('span', { class: 'hw-tile-tx' }, h('b', null, t.title), h('small', null, t.sub)),
       ], t.fn, { sound: 'click', attrs: { 'data-page': t.id } }))));
+  }
+
+  /** Menu's first row while the villagers are on, at every width (the hearth chip hides on the narrowest phones). */
+  function townTile() {
+    const t = app.town;
+    let on = false, cz = null, V = null;
+    try { on = !!t?.enabled?.(); if (on) { cz = t.cozy?.() || null; V = t.view?.() || null; } } catch { on = false; }
+    if (!on || !townHud) return null;
+    const tier = { quiet: 'Quiet', content: 'Content', cheerful: 'Cheerful', glowing: 'Glowing' }[cz?.tier] || '';
+    const folk = (V?.villagers || []).filter((v) => v && v.status !== 'traveller').length;
+    const wishes = Number(V?.openWishes) || 0;
+    const sub = [cz ? `Cozy ${Math.round(Number(cz.value) || 0)}${tier ? ' · ' + tier : ''}` : null,
+      folk ? `${folk} neighbour${folk === 1 ? '' : 's'}` : 'No neighbours yet', wishes ? `${wishes} wish${wishes === 1 ? '' : 'es'} open` : null].filter(Boolean).join(' · ');
+    return btn('hw-tile hw-tile-town', 'Town', [
+      h('span', { class: 'hw-tile-ic' }, '🔥'),
+      h('span', { class: 'hw-tile-tx' }, h('b', null, 'Town'), h('small', null, sub)),
+    ], () => { closeSheet(false); townHud?.openTown(); }, { sound: 'click', attrs: { 'data-page': 'town' } });
   }
 
   async function newBuild() {
@@ -1406,7 +1466,7 @@ export function init(app) {
   }
   function syncSettings(changed) {
     if (page !== 'settings') return;
-    for (const k of ['sound', 'music', 'shadows', 'timeFlow']) {
+    for (const k of ['sound', 'music', 'shadows', 'timeFlow', 'village', 'chatter']) {
       if (!changed.includes(k) || !pageRefs[k]) continue;
       pageRefs[k].classList.toggle('is-on', !!state[k]);
       pageRefs[k].setAttribute('aria-checked', String(!!state[k]));
@@ -1418,6 +1478,20 @@ export function init(app) {
       if (pageRefs.timeIc.textContent !== ic) pageRefs.timeIc.textContent = ic;
     }
     if (['quality', 'season', 'weather'].some((k) => changed.includes(k))) refreshPage();
+  }
+  /** Settings → Village (docs/LIVING.md §10.7): only when the town module loaded. With ?town=0 (or a showcase) the
+   *  switches show the saved value, noted as off for this page. */
+  function villageSection() {
+    if (!app.town) return null;
+    const offHere = params.get('town') === '0' || params.has('showcase');
+    const rowV = toggle('village', 'Villagers & wishes', '🧺');
+    const rowC = toggle('chatter', 'Villager chatter', '💬');
+    if (offHere) for (const r of [rowV, rowC]) r.querySelector('.hw-set-lb')?.append(' ', h('span', { class: 'hw-set-off' }, '(off for this page)'));
+    return h('section', { class: 'hw-card-sec hw-village', 'data-sec': 'village' },
+      h('h3', null, 'Village'),
+      rowV,
+      h('p', { class: 'hw-set-note' }, 'Off: a quiet build-only meadow. Nothing is lost.'),
+      rowC);
   }
   function pageSettings() {
     const time = h('input', { class: 'hw-range hw-time', type: 'range', min: '0', max: '1', step: '0.001', value: String(state.time), 'aria-label': 'Time of day' });
@@ -1446,6 +1520,7 @@ export function init(app) {
         toggle('music', 'Music', '🎵'),
         toggle('shadows', 'Soft shadows', '🌗'),
         h('div', { class: 'hw-set-row' }, h('span', { class: 'hw-set-ic' }, '✨'), h('span', { class: 'hw-set-lb' }, 'Quality'), seg(QUALITY, state.quality, (v) => state.set({ quality: v }), 'hw-seg-sm'))),
+      villageSection(),
       h('section', { class: 'hw-card-sec' },
         h('div', { class: 'hw-row' },
           btn('hw-pill', 'Show the welcome again', h('span', null, '👋 Show welcome'), () => { closeSheet(false); showWelcome(); }),
@@ -1475,11 +1550,20 @@ export function init(app) {
       ['D', 'Draw / Look'], ['V', 'Show all floors'], ['+  −', 'Floor up / down'], ['[  ]', 'Roof height'],
       ['Q  ⇧W', 'Turn the view'], ['1–7', 'Categories'], ['Ctrl Z', 'Undo'], ['Ctrl ⇧Z', 'Redo'], ['M', 'Menu'], ['Esc', 'Cancel / close'],
     ];
+    if (app.town) keys.splice(keys.length - 2, 0, ['T', 'Town & Cozy'], ['J', 'Next wish']);
+    const village = [
+      ['🏡', 'Homes', 'Walls, a roof, a door and a bed make a home, and someone may move in.'],
+      ['💭', 'Wishes', 'Tap a bubble over a villager, then Show me: a glowing spot shows where.'],
+      ['🔥', 'Cozy', 'The hearth by the piece counter glows as the town gets cosier.'],
+      ['🧺', 'Quiet meadow', 'Turn villagers off in Settings for a build-only meadow. Nothing is lost.'],
+    ];
     return h('div', { class: 'hw-page hw-help' },
       h('section', { class: 'hw-card-sec' }, h('h3', null, 'Gestures'),
         h('div', { class: 'hw-helps' }, gestures.map(([i, t, d]) => h('div', { class: 'hw-help' }, h('span', { class: 'hw-help-ic' }, i), h('div', null, h('b', null, t), h('small', null, d)))))),
       h('section', { class: 'hw-card-sec' }, h('h3', null, 'Building tips'),
         h('div', { class: 'hw-helps' }, tips.map(([i, t, d]) => h('div', { class: 'hw-help' }, h('span', { class: 'hw-help-ic' }, i), h('div', null, h('b', null, t), h('small', null, d)))))),
+      app.town ? h('section', { class: 'hw-card-sec', 'data-sec': 'villagers' }, h('h3', null, 'Villagers'),
+        h('div', { class: 'hw-helps' }, village.map(([i, t, d]) => h('div', { class: 'hw-help' }, h('span', { class: 'hw-help-ic' }, i), h('div', null, h('b', null, t), h('small', null, d)))))) : null,
       coarse && !matchMedia('(any-pointer: fine)').matches ? null : h('section', { class: 'hw-card-sec' }, h('h3', null, 'Keyboard & mouse'),
         h('p', { class: 'hw-note' }, 'Left-drag to look · right-drag or Shift-drag to slide · wheel to zoom.'),
         h('div', { class: 'hw-keys' }, keys.map(([k, d]) => h('div', { class: 'hw-key' }, h('kbd', null, k), h('span', null, d))))));
@@ -1595,6 +1679,7 @@ export function init(app) {
       h('div', { class: 'hw-welcome-art', html: HOUSE_SVG }),
       h('h2', null, 'Welcome to Hearthwood'),
       h('p', null, 'Build a cozy home board by board — every wall, window, door and roof panel.'),
+      townOn() ? h('p', { class: 'hw-welcome-town' }, 'Build a home with a bed and someone may move in.') : null,
       h('div', { class: 'hw-welcome-acts' },
         B_HAS('list') && B_HAS('startGuided')
           ? btn('hw-big hw-big-primary', 'Follow a blueprint', [h('span', { class: 'hw-big-ic' }, '📐'), h('span', null, h('b', null, 'Follow a blueprint'), h('small', null, 'Glowing guides show the way'))], () => { hideWelcome(); openSheet('blueprints'); }, { attrs: { 'data-act': 'blueprint' } })
@@ -1612,6 +1697,7 @@ export function init(app) {
     welcome.classList.add('is-open');
     sfx('open');
   }
+  const townOn = () => { try { return !!app.town?.enabled?.(); } catch { return false; } };
   function hideWelcome(sound = true) {
     if (!welcome.classList.contains('is-open')) return;
     welcome.classList.remove('is-open');
@@ -1625,7 +1711,7 @@ export function init(app) {
     const has = (...ks) => ks.some((k) => changed.includes(k));
     if (has('level')) renderLevel();
     if (has('tool', 'drawMode', 'seeAll')) renderRail();
-    if (has('category')) { markTab(); renderCards(); }
+    if (has('category')) { seenGarden(); markTab(); renderCards(); }
     if (has('pieceId')) {
       markCard();
       if (popOpen && pop.classList.contains('hw-pop-info')) closePop();
@@ -1662,8 +1748,15 @@ export function init(app) {
   events.on('toast', (d) => {
     if (!d) return;
     if (typeof d === 'string') toast(d);
-    else toast(d.text, d.kind || 'info', d.ms || 2400);
+    else toast(d.text, d.kind || 'info', d.ms || 2400, d.action || null);
   });
+  // a thank-you gift was unlocked (docs/LIVING.md §8.3): its card appears in the Garden tray with a ribbon
+  events.on('town-gift', () => {
+    giftDot = state.category !== 'garden';
+    renderTabs();
+    renderCards(true);
+  });
+  events.on('placed', (d) => { if (d?.def?.gift) setTimeout(markGifts, 0); });   // after the town marks it seen
   events.on('blueprint-progress', (d) => {
     if (!d) return;
     const was = bp && bp.id === d.id ? bp.done : -1;
@@ -1709,15 +1802,24 @@ export function init(app) {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === 'Escape') {
       if (dlgResolve) { dlgResolve(null); dlgResolve = null; dlgWrap.classList.remove('is-open'); }
+      else if (townHud?.isOpen()) townHud.close();
       else if (popOpen) closePop();
       else if (sheetWrap.classList.contains('is-open')) closeSheet();
       else if (welcome.classList.contains('is-open')) hideWelcome();
       else if (state.photoMode) state.set({ photoMode: false });
+      else { try { if (app.town?.showing?.()) app.town.endShowMe(); } catch { /* the town reports its own failures */ } }
       return;
     }
     const k = e.key.toLowerCase();
     if (k === 'm') { if (sheetWrap.classList.contains('is-open')) closeSheet(); else openSheet('main'); }
     else if (k === '?' || k === 'h') openSheet('help');
+    else if ((k === 't' || k === 'j') && townHud && !state.photoMode && !dlgResolve) {
+      // T: the town card; J: jump to the next open wish (camera + card). builder.js uses neither key.
+      closePop();
+      closeSheet(false);
+      hideWelcome(false);
+      if (k === 't') townHud.openTown(); else townHud.nextWish();
+    }
   });
 
   // ------------------------------------------------------------------ first paint
@@ -1754,17 +1856,34 @@ export function init(app) {
   };
   if (window.__hwReady) onReady(); else events.on('ready', onReady);
 
+  // The town's face (docs/LIVING.md §10): bubbles, cards, the hearth. Loaded after first paint, only when the town
+  // module is there; a failure here never takes the building UI with it.
+  if (app.town) {
+    requestAnimationFrame(() => {
+      import('./town/hud.js').then((m) => {
+        if (!app.town || townHud) return;
+        townHud = m.createHud(app, { root, topLeft: top.querySelector('.hw-top-l'), toast, ask });
+        if (page === 'main' || page === 'settings' || page === 'help') refreshPage();
+      }).catch((e) => console.error('[hearthwood] town hud failed to load:', e));
+    });
+  }
+
   return {
-    update() {
+    update(dt) {
       // world.endBatch() (draw strokes, stamped blueprints) commits undo steps without a
       // world-change event, so keep the undo/redo buttons honest with two cheap reads per frame.
       if (world.canUndo() !== canU || world.canRedo() !== canR) renderHistory();
+      if (townHud) {
+        try { townHud.update(dt); } catch (e) { console.error('[hearthwood] town hud:', e); try { townHud.destroy?.(); } catch { /* ignore */ } townHud = null; }
+      }
     },
     toast,
     open: openSheet,
     close: closeSheet,
     showWelcome,
     ask,
+    /** The town's hud (js/town/hud.js) once mounted, else null. */
+    get hud() { return townHud; },
   };
 }
 

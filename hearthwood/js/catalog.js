@@ -38,7 +38,12 @@ const order = [];
  *   desc: string                         one-line description shown in UI
  *   icon: string                         emoji fallback for the palette
  *   sound: 'wood'|'stone'|'soft'|'glass'|'metal'|'leaf'   placement sound flavour
- *   hidden: boolean                      registered but not shown in the palette
+ *   hidden: boolean                      registered but not shown in the palette (setHidden() flips it; world.validate,
+ *                                        saves, share codes and Pick ignore it)
+ *   gift: { job: string|null }           a villagers' thank-you gift (js/pieces/gifts.js): registered hidden, shown in
+ *                                        the tray once unlocked (docs/LIVING.md §8); job id of the giver, or null
+ *   walk: 'solid'|'soft'                 how villagers path round the piece (town nav, LIVING.md §6.1): solid items
+ *                                        block their cell, soft ones can be walked over at a cost
  */
 export function registerPiece(def) {
   if (!def || !def.id) throw new Error('registerPiece: missing id');
@@ -67,3 +72,10 @@ export function registerPiece(def) {
 export const getDef = (id) => registry.get(id);
 export const allDefs = () => order.map((id) => registry.get(id));
 export const piecesIn = (cat) => allDefs().filter((d) => d.cat === cat && !d.hidden);
+
+/** Show (false) or hide (true) a registered piece in the palette, e.g. a gift once unlocked. false for an unknown id. */
+export function setHidden(id, hidden) {
+  const d = registry.get(id);
+  if (d) d.hidden = !!hidden;
+  return !!d;
+}

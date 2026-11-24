@@ -25,7 +25,7 @@ const LOT_LO = GRID_MIN * CELL;                       // -20
 const LOT_HI = (GRID_MAX + 1) * CELL;                 //  20
 const LOT_HALF = Math.max(-LOT_LO, LOT_HI);
 const KEEP = LOT_HALF + 2.5;                          // scenery only where max(|x|,|z|) > KEEP
-const DAY_SECONDS = 600;                              // a full day takes 10 minutes when time flows
+export const DAY_SECONDS = 600;                       // a full day takes 10 minutes when time flows
 const SKY_R = 300;
 const STAR_R = 260;
 const GROUND_R = 430;
@@ -38,7 +38,7 @@ const MOBILE = typeof navigator !== 'undefined' && (/Mobi|Android|iPhone|iPad|iP
   || (navigator.maxTouchPoints > 1 && Math.min(screen.width, screen.height) < 900));
 
 // Country lane (polyline, world XZ) from the lot's west edge winding off to the north-west horizon.
-const LANE = [[-20.5, -2], [-28, -3.5], [-37, -8], [-46, -16], [-54, -27], [-64, -40], [-78, -52], [-96, -63],
+export const LANE = [[-20.5, -2], [-28, -3.5], [-37, -8], [-46, -16], [-54, -27], [-64, -40], [-78, -52], [-96, -63],
   [-118, -78], [-144, -98], [-176, -122], [-215, -148], [-262, -176]];
 // Pond (ellipse with a wobbly shore) behind the lot.
 const POND = { x: -4, z: -45, rx: 9.5, rz: 6.2, rot: 0.3 };
@@ -124,6 +124,16 @@ export function heightAt(x, z) {
 }
 
 // ===================================================================== palettes
+
+// The dusk lingers (Living Town, so evening life stays readable with the day passing): from the Sunset preset (0.74,
+// 17:45) the sun sinks slowly, so 17:45–20:10 is a long sunset into a blue dusk, then night deepens by 22:05 and the
+// sun is back in step. Every preset (dawn, morning, noon, sunset, night) looks as it always did.
+const DUSK = [0.74, 0.84, 0.762, 0.92];        // from, slow part ends, sun time there, back in step
+function sunTime(t) {
+  const [a, b, sb, c] = DUSK;
+  if (t <= a || t >= c) return t;
+  return t <= b ? a + ((t - a) * (sb - a)) / (b - a) : sb + ((t - b) * (c - sb)) / (c - b);
+}
 
 // Sky keyframes by sun elevation (sin of the sun's altitude). At night `sun*` is the moonlight.
 //  zen/hor: sky zenith & horizon · glow: sun halo & sunset band · sun/si: directional light colour & intensity
@@ -1008,7 +1018,7 @@ class Env {
 
   /** Interpolate the sky palette for the current sun elevation, blend in weather, push to everything. */
   _updateSky() {
-    const t = this.t;
+    const t = sunTime(this.t);
     const th = (t - 0.25) * TAU;
     // the sun arcs east (+X) → south (+Z, high) → west (-X); the moon trails half a day behind
     this.sunDir.set(Math.cos(th), Math.sin(th), 0.55).normalize();
@@ -1703,7 +1713,7 @@ class Env {
       o.localToWorld(_v);
       if (this.slotEntry[k] !== e) { this.slotEntry[k] = e; this.slotFade[k] = 0; }
       this.slotFade[k] = Math.min(1, this.slotFade[k] + dt * 0.5);
-      U[k].set(_v.x, _v.y, _v.z, this.slotFade[k]);
+      U[k].set(_v.x, _v.y, _v.z, this.slotFade[k] * (e.def.smokeAlpha ?? 1));   // smokeAlpha: a thinner wisp (fire pit)
       any = true;
       k++;
     }

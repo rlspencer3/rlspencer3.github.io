@@ -98,7 +98,7 @@ world.onRemount = (from, to) => effects.retarget(from, to);      // a rebuilt pi
 const app = {
   THREE, scene, camera, renderer, world, rig, effects, state, events, catalog, materials, storage,
   params, errors, modules: {},
-  builder: null, env: null, audio: null, ui: null, blueprints: null,
+  builder: null, env: null, audio: null, ui: null, blueprints: null, town: null,
   thumbnail: (id, rec) => thumbnail(world, id, rec),
   fallback: { lights: fallbackLights, ground: fallbackGround },
   /** Render one frame and return a PNG dataURL (optionally downscaled to maxWidth). */
@@ -209,14 +209,17 @@ function setLoading(text, frac) {
 
 async function boot() {
   setLoading('Gathering timber…', 0.15);
-  // sequential so palette order is deterministic
-  for (const name of ['floors', 'walls', 'roof', 'decor']) await loadModule(name, `./pieces/${name}.js`, false);
+  // sequential so palette order is deterministic; the villagers' gift pieces always register (they read their own
+  // unlocks), whatever the village setting
+  for (const name of ['floors', 'walls', 'roof', 'decor', 'gifts']) await loadModule(name, `./pieces/${name}.js`, false);
   setLoading('Planting the meadow…', 0.45);
   app.env = await loadModule('env', './env.js');
   if (app.env) { scene.remove(fallbackLights); scene.remove(fallbackGround); }
   app.audio = await loadModule('audio', './audio.js');
   setLoading('Drawing blueprints…', 0.7);
   app.blueprints = await loadModule('blueprints', './blueprints.js');
+  setLoading('Waking the village…', 0.8);
+  app.town = await loadModule('town', './town/index.js');      // villagers (docs/LIVING.md); app.town = TownAPI
   setLoading('Lighting the hearth…', 0.85);
   if (params.get('ui') !== '0') app.ui = await loadModule('ui', './ui.js');
 
@@ -224,12 +227,17 @@ async function boot() {
   const showcase = params.get('showcase');
   const bp = params.get('bp');
   let restored = false;      // the autosave was loaded
+  let dropped = 0;           // …and how many of its pieces couldn't be used (e.g. pieces an older version doesn't know)
   if (showcase) buildShowcase(showcase);
   else if (bp && app.blueprints?.stamp) {
     app.blueprints.stamp(bp, { animate: false, record: false });
   } else if (params.get('clean') !== '1') {
     const saved = storage.loadAutosave();
-    if (saved?.pieces?.length) { app.loadBuild(saved); restored = true; }
+    if (saved?.pieces?.length) {
+      const n = app.loadBuild(saved);
+      restored = true;
+      dropped = (saved.dropped || 0) + Math.max(0, saved.pieces.length - (Number(n) || 0));
+    }
     else if (app.blueprints?.welcome) app.blueprints.welcome();
   }
   world.batcher.flush();     // starting content: bake on the next frames (no quiet period)
@@ -253,7 +261,9 @@ async function boot() {
   // closed, so a piece placed just before the player leaves, or a new look at the house, is never lost
   if (!showcase && params.get('nosave') !== '1') {
     let saveTimer = null;
-    let savedView = restored ? JSON.stringify(rig.getView()) : null;   // view in the stored autosave
+    // view in the stored autosave; a restore that dropped pieces is never overwritten by a camera-only flush
+    // (edits still save)
+    let savedView = restored && !(dropped > 0) ? JSON.stringify(rig.getView()) : null;
     const saveNow = () => {
       clearTimeout(saveTimer);
       saveTimer = null;
@@ -375,6 +385,7 @@ function frame() {
   try { app.env?.update?.(dt); } catch (e) { reportError('env.update', e); app.env.update = null; }
   try { app.audio?.update?.(dt); } catch (e) { reportError('audio.update', e); app.audio.update = null; }
   try { app.blueprints?.update?.(dt); } catch (e) { reportError('blueprints.update', e); app.blueprints.update = null; }
+  try { app.town?.update?.(dt); } catch (e) { reportError('town.update', e); app.town.update = null; }
   try { app.ui?.update?.(dt); } catch (e) { reportError('ui.update', e); app.ui.update = null; }
   try { if (world.tick(dt)) renderer.shadowMap.needsUpdate = true; } catch (e) { reportError('world.tick', e); world.batcher.setEnabled(false); }
   renderer.render(scene, camera);

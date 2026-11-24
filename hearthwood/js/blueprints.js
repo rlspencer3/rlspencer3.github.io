@@ -646,6 +646,9 @@ export function init(app) {
       anim = { keys, i: 0, time: 0, lastSfx: -1, n: 0 };
       state.set({ seeAll: true });
       rig.setView(view(bp.cam));
+      // with villagers on, once the cascade is done the camera eases out (only if it must) so the garden where the
+      // routine plays out is in the shot too (the finishing glide; any touch of the camera cancels it)
+      if (!guide && app.town?.enabled?.() && app.scene?.getObjectByName?.('town')) glide = { bp, wait: D + 0.4, t: 0, from: null, to: null, last: rig.getView(), cap: 1.15 };
     } else {
       rig.setView(view(bp.cam), !animate);
     }
@@ -890,14 +893,18 @@ export function init(app) {
   // other camera move (a finger, the wheel, a new view) hands the camera straight back to the player.
   let glide = null;   // { bp, wait, t, from, to, last }
 
-  function finishView(bp) {
+  function finishView(bp, cap = Infinity) {
     const v = view(bp.cam);
+    const rMax = Math.min(rig.maxRadius, Math.max(v.r, rig.minRadius) * cap);   // cap: how far it may pull back
     const TAU = Math.PI * 2;
     v.th = bp.cam.th + TAU * Math.round((rig.goal.theta - bp.cam.th) / TAU);
     // the house as built (garden scenery left out): the placed pieces' real bounds
     const box = new THREE.Box3();
+    // with villagers on, their garden (benches, hives, beds of flowers; trees aside) is in the shot too: that is
+    // where the routine plays out (Living Town)
+    const lived = !!app.town?.enabled?.();
     for (const { key, def } of bp._items) {
-      if (def.cat === 'garden') continue;
+      if (def.cat === 'garden' && (!lived || /^tree_/.test(def.id))) continue;
       const e = world.entry(key);
       if (e) box.expandByObject(e.obj);
     }
@@ -918,7 +925,7 @@ export function init(app) {
     const cam = app.camera.clone();
     cam.clearViewOffset();
     const T = new THREE.Vector3(v.t[0], v.t[1], v.t[2]), q = new THREE.Vector3(), sp = Math.sin(v.ph);
-    for (let r = Math.max(v.r, rig.minRadius); r <= rig.maxRadius; r *= 1.05) {
+    for (let r = Math.max(v.r, rig.minRadius); r <= rMax * 1.0001; r = Math.min(r * 1.05, r < rMax ? rMax : Infinity)) {
       v.r = r;
       cam.position.set(T.x + r * sp * Math.sin(v.th), Math.max(0.6, T.y + r * Math.cos(v.ph)), T.z + r * sp * Math.cos(v.th));
       cam.lookAt(T);
@@ -941,7 +948,7 @@ export function init(app) {
       if (Math.abs(v.r - l.r) > 1e-3 || Math.abs(v.th - l.th) > 1e-4 || Math.abs(v.ph - l.ph) > 1e-4 || v.t.some((x, i) => Math.abs(x - l.t[i]) > 1e-3)) { glide = null; return; }
     }
     if (gl.wait > 0) { gl.wait -= dt; return; }
-    if (!gl.to) { gl.from = rig.getView(); gl.to = finishView(gl.bp); }
+    if (!gl.to) { gl.from = rig.getView(); gl.to = finishView(gl.bp, gl.cap); }
     gl.t = Math.min(1, gl.t + dt / 1.6);
     const k = gl.t * gl.t * (3 - 2 * gl.t), f = gl.from, to = gl.to;
     const mix = (a, c) => a + (c - a) * k;

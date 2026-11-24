@@ -23,11 +23,13 @@ const defaults = {
   paintColor: null,     // paint tool: colour to apply (null = keep)
   // Environment & settings (persisted)
   time: 0.42,           // 0..1 day cycle (0.25 sunrise, 0.5 noon, 0.75 sunset, 0/1 midnight)
-  timeFlow: false,      // let the day pass by itself
+  timeFlow: true,       // let the day pass by itself (on by default, so village life can be watched: LIVING.md §0.4)
   season: 'summer',     // 'spring' | 'summer' | 'autumn' | 'winter'
   weather: 'clear',     // 'clear' | 'rain' | 'snow' | 'leaves'
   sound: true,
   music: true,
+  village: true,        // villagers & wishes (js/town/); off = a quiet build-only meadow, nothing is lost
+  chatter: true,        // villagers' ambient babble (its own switch: the sound most likely to annoy)
   shadows: true,
   quality: 'auto',      // 'low' | 'high' | 'auto'
   photoMode: false,
@@ -35,7 +37,7 @@ const defaults = {
   slot: 1,              // current save slot
 };
 
-const PERSIST = ['time', 'timeFlow', 'season', 'weather', 'sound', 'music', 'shadows', 'quality', 'mats', 'colors', 'accent', 'slot'];
+const PERSIST = ['time', 'timeFlow', 'season', 'weather', 'sound', 'music', 'shadows', 'quality', 'mats', 'colors', 'accent', 'slot', 'village', 'chatter'];
 
 // Saved settings are checked before use: an old version, a hand-edited value or a NaN written by a bad
 // URL parameter must never reach the game (a null `mats` would break every placement).

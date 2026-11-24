@@ -2163,7 +2163,8 @@ decor({
 // ---------------------------------------------------------------- fire pit (smokes)
 decor({
   id: 'fire_pit', name: 'Fire Pit', cat: 'garden', icon: '🔥', sound: 'stone', levels: GROUND_LEVEL,
-  emitter: 'smoke', emitterOffset: [0, 0.35, 0],
+  // a thin wisp that starts above head height, so whoever sits round the fire stays in view (Living Town feel check)
+  emitter: 'smoke', emitterOffset: [0, 1.0, 0], smokeAlpha: 0.45,
   desc: 'A ring of stones round a crackling campfire, with log seats for toasting marshmallows.',
   build(g) {
     const stone = mat('path'), ember = mat('ember'), glow = mat('lampGlow');

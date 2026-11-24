@@ -1,6 +1,8 @@
 // Hearthwood — synthesized audio. Everything is generated with the Web Audio API (no files).
 //
-//  • Sound effects for building & UI          events.on('sfx', {name, flavor})
+//  • Sound effects for building & UI          events.on('sfx', {name, flavor, opts?: {pitch, gain, pan}})
+//  • Villagers (docs/LIVING.md §11): wish / move-in / gift chimes, a babble on the villager card, a hop "oop!",
+//    and ambient chatter + work foley near the camera target, read from app.town.audible()
 //  • Ambience: soft wind, daytime birdsong, night crickets & owls, rain, fire crackle near a
 //    fireplace / stove / fire pit, frogs by a pond at night, leaf rustles in autumn weather
 //  • Generative music: kalimba / music-box melody over warm pad chords in F major pentatonic,
@@ -39,6 +41,7 @@ const GAP = {
   place: 0.045, replace: 0.05, remove: 0.05, paint: 0.06, rotate: 0.045, click: 0.035, open: 0.07,
   close: 0.07, undo: 0.06, level: 0.09, error: 0.22, success: 0.25, camera: 0.3,
   'blueprint-step': 0.07, 'blueprint-done': 0.8,
+  wish: 0.5, 'wish-granted': 0.6, 'move-in': 1.0, gift: 1.0, villager: 0.2, hop: 0.15,
 };
 
 const SEASON_BIRDS = { spring: 1.3, summer: 1, autumn: 0.6, winter: 0.25 };
@@ -456,7 +459,7 @@ const PLACE = {
       e.gain.setValueAtTime(0, tt);
       e.gain.linearRampToValueAtTime(pk, tt + 0.004);
       e.gain.exponentialRampToValueAtTime(0.0001, tt + 0.03);
-      tt += rnd(0.026, 0.042);
+      tt += rnd(0.031, 0.042);     // never before the last burst's ramp ends: overlapping ramps spiked past 0 dBFS
     }
   },
 };
@@ -562,6 +565,125 @@ const SFX = {
       }
     }
   },
+
+  // ---- villagers (docs/LIVING.md §11.1)
+  wish(v, out, wet, t, o) {      // two soft rising blips, very quiet (only while the bubble is on screen)
+    tone(v, wet, t, mtof(KEY + 12), { a: 0.008, d: 0.16, g: 0.075 * o.g });
+    tone(v, wet, t, mtof(KEY + 24), { a: 0.004, d: 0.06, g: 0.012 * o.g });
+    tone(v, wet, t + 0.11, mtof(KEY + 19), { a: 0.008, d: 0.24, g: 0.07 * o.g });
+  },
+
+  'wish-granted'(v, out, wet, t, o) {   // music-box arpeggio over a soft bell, shimmer tail (brighter than success)
+    tone(v, wet, t, mtof(KEY), { a: 0.012, d: 1.5, g: 0.055 * o.g });                 // bell
+    tone(v, wet, t, mtof(KEY) * 2.76, { a: 0.004, d: 0.55, g: 0.016 * o.g });
+    tone(v, wet, t, mtof(KEY) * 5.4, { a: 0.002, d: 0.2, g: 0.008 * o.g });
+    [KEY + 12, KEY + 16, KEY + 19, KEY + 24].forEach((m, i) => {
+      const tt = t + i * 0.085;
+      chime(v, wet, tt, mtof(m), 0.135 * o.g * (1 - i * 0.07), 0.65 + i * 0.16);
+      tone(v, wet, tt, mtof(m) * 3.01, { a: 0.001, d: 0.11, g: 0.022 * o.g });        // the tine's tick
+    });
+    for (let i = 0; i < 6; i++) {                                                       // shimmer tail
+      tone(v, wet, t + 0.4 + i * 0.05, mtof(pentNote(KEY + 31, i)), { a: 0.001, d: 0.28, g: 0.024 * o.g * (1 - i * 0.12) });
+    }
+  },
+
+  'move-in'(v, out, wet, t, o) {   // two wood knocks at the door, then a warm 4-note jingle over a short pad swell
+    PLACE.wood(v, out, wet, t, 1.28, 0.55 * o.g);
+    PLACE.wood(v, out, wet, t + 0.18, 1.22, 0.48 * o.g);
+    const t1 = t + 0.95;                                                                 // lights on (§4.6)
+    [KEY + 7, KEY + 12, KEY + 16, KEY + 19].forEach((m, i) => chime(v, wet, t1 + i * 0.13, mtof(m), 0.12 * o.g * (1 - i * 0.05), 0.9 + i * 0.12));
+    chime(v, wet, t1 + 0.62, mtof(KEY + 24), 0.06 * o.g, 1.2);
+    const lp = v.filter('lowpass', 1300, 0.6, wet);
+    const e = v.gain(0, lp);
+    e.gain.setValueAtTime(0, t1);
+    e.gain.linearRampToValueAtTime(0.03 * o.g, t1 + 0.35);
+    e.gain.setValueAtTime(0.03 * o.g, t1 + 0.8);
+    e.gain.linearRampToValueAtTime(0, t1 + 1.9);
+    for (const m of [KEY - 12, KEY - 5, KEY, KEY + 4]) {
+      const osc = v.osc(v.kit.wave.warm);
+      osc.frequency.value = mtof(m); osc.detune.value = m % 2 ? 6 : -6;
+      osc.connect(e);
+      v.play(osc, t1, t1 + 1.95);
+    }
+  },
+
+  gift(v, out, wet, t, o) {      // ribbon rustle (crinkly band-passed noise) + a rising glissando chime
+    let tt = t;
+    for (let i = 0; i < 9; i++) {   // separate little bursts: no envelope ever overlaps another's automation
+      noise(v, out, tt, { type: 'bandpass', f: 2800 + i * 260 + rnd(-200, 200), q: 1.1, a: 0.004, d: 0.035, g: rnd(0.16, 0.32) * o.g * (1 - i * 0.06) });
+      tt += rnd(0.03, 0.052);
+    }
+    for (let i = 0; i < 7; i++) chime(v, wet, t + 0.34 + i * 0.05, mtof(pentNote(KEY + 12, i)), 0.085 * o.g * (0.75 + i * 0.05), 0.45 + i * 0.09);
+  },
+
+  villager(v, out, wet, t, o) {  // a 3-syllable babble in the villager's voice (opts.pitch 0.85–1.25)
+    babbleOn(v, out, t, clamp(Number(o.pitch) || 1, 0.6, 1.6), 0.2 * o.g, 3, 1100);
+  },
+
+  hop(v, out, wet, t, o) {       // tiny "oop!"
+    const p = clamp(Number(o.pitch) || 1, 0.6, 1.6);
+    tone(v, out, t, 430 * p, { type: 'triangle', to: 660 * p, glide: 0.06, a: 0.004, d: 0.09, g: 0.2 * o.g });
+    tone(v, out, t + 0.075, 610 * p, { type: 'triangle', to: 390 * p, glide: 0.05, a: 0.004, d: 0.08, g: 0.11 * o.g });
+  },
+};
+
+/**
+ * A little babble: syllables of a triangle voice through a moving vowel formant (band-pass) plus a soft low body.
+ * Used by the villager card's `villager` sfx and the ambient chatter. Returns the end time.
+ */
+function babbleOn(v, dest, t, voice, g, syllables, formant = 0) {
+  const e = v.gain(0);
+  const bp = v.filter('bandpass', formant || rnd(700, 1800), 4);
+  const bpOut = v.gain(3.2, dest);              // the formant keeps little of a triangle: bring it back up
+  const lp = v.filter('lowpass', 900, 0.7);
+  const lpOut = v.gain(0.55, dest);
+  e.connect(bp); bp.connect(bpOut);
+  e.connect(lp); lp.connect(lpOut);
+  const o = v.osc(null, 'triangle');
+  o.connect(e);
+  let f = rnd(180, 340) * voice, tt = t;
+  for (let i = 0; i < syllables; i++) {
+    const d = rnd(0.06, 0.12);
+    o.frequency.setValueAtTime(f, tt);
+    o.frequency.linearRampToValueAtTime(f * rnd(0.86, 1.14), tt + d);
+    bp.frequency.setValueAtTime(formant ? formant * rnd(0.75, 1.3) : rnd(700, 1800), tt);
+    e.gain.setValueAtTime(0, tt);
+    e.gain.linearRampToValueAtTime(g, tt + 0.01);
+    e.gain.setValueAtTime(g, tt + Math.max(0.011, d - 0.06));
+    e.gain.exponentialRampToValueAtTime(0.0001, tt + d + 0.06);
+    tt += d + rnd(0.02, 0.05);
+    f = clamp(f * rnd(0.88, 1.13), 170 * voice, 360 * voice);
+  }
+  v.play(o, t, tt + 0.08);
+  return tt + 0.08;
+}
+
+// Work foley near the camera target (docs/LIVING.md §11.2). (voice, out, time, gain)
+const FOLEY = {
+  chop(v, out, t, g) {           // axe "tok"
+    tone(v, out, t, 250, { to: 165, glide: 0.04, a: 0.001, d: 0.1, g: 0.32 * g });
+    tone(v, out, t + 0.004, 780, { type: 'triangle', to: 640, glide: 0.03, a: 0.001, d: 0.045, g: 0.12 * g });
+    noise(v, out, t, { type: 'bandpass', f: 1900, q: 2.2, a: 0.0008, d: 0.03, g: 0.45 * g });
+  },
+  splash(v, out, t, g) {         // a plip and a little spray
+    tone(v, out, t, 880, { to: 1750, glide: 0.035, a: 0.001, d: 0.06, g: 0.1 * g });
+    noise(v, out, t + 0.018, { type: 'bandpass', f: 2600, to: 900, sweep: 0.3, q: 0.8, a: 0.006, d: 0.28, g: 0.3 * g });
+  },
+  cluck(v, out, t, g) {          // "buk-buk-bawk"
+    for (let i = 0; i < 3; i++) {
+      const tt = t + i * 0.12 + (i === 2 ? 0.06 : 0), f = (i === 2 ? 720 : 560) * rnd(0.95, 1.05);
+      const bp = v.filter('bandpass', 1300, 2.5, out);
+      tone(v, bp, tt, f, { type: 'sawtooth', to: f * (i === 2 ? 0.8 : 0.9), glide: 0.05, a: 0.003, d: i === 2 ? 0.14 : 0.05, g: 0.2 * g });
+    }
+  },
+  hum(v, out, t, g) {            // a hummed kalimba phrase (Cheerful and up)
+    let m = pentNote(KEY + 5, (Math.random() * 3) | 0);
+    for (let i = 0; i < 4; i++) {
+      chime(v, out, t + i * 0.24, mtof(m), 0.07 * g * (1 - i * 0.1), 0.55);
+      m = pentNote(m + 1, Math.random() < 0.55 ? 0 : 1) - (Math.random() < 0.3 ? 12 : 0);
+      if (m < KEY) m += 12;
+    }
+  },
 };
 
 function whoosh(v, out, wet, t, up, o) {     // paper whoosh up / down
@@ -576,8 +698,11 @@ function playSfxOn(kit, name, t, o) {
   if (!fn) return null;
   const v = new Voice(kit, 'sfx');
   try {
-    const out = v.gain(o.vol ?? 1, kit.bus.sfx.dry);
-    const wet = v.gain(o.vol ?? 1, kit.bus.sfx.inp);
+    // optional opts from the bus: gain (0..2) and pan (-1..1), e.g. a villager's hop beside the camera target
+    const vol = (o.vol ?? 1) * (Number.isFinite(o.gain) ? clamp(o.gain, 0, 2) : 1);
+    const pan = Number.isFinite(o.pan) ? clamp(o.pan, -1, 1) : 0;
+    const out = v.gain(vol, pan ? v.pan(pan, kit.bus.sfx.dry) : kit.bus.sfx.dry);
+    const wet = v.gain(vol, pan ? v.pan(pan, kit.bus.sfx.inp) : kit.bus.sfx.inp);
     fn(v, out, wet, t, o);
   } finally {
     if (v.live === 0) v.done();
@@ -856,8 +981,8 @@ class Ambience {
     this.rain = new Layer(kit, dry, LAYERS.rain, ['pink', 'rain']);
     this.crickets = new Layer(kit, dry, LAYERS.crickets, ['cricketA', 'cricketB']);
     this.fire = new Layer(kit, dry, LAYERS.fire, ['crackle']);
-    this.next = { bird: -1, owl: -1, frog: -1, drip: -1, rustle: -1, gust: 0 };
-    this.count = { bird: 0, owl: 0, frog: 0, drip: 0, rustle: 0 };
+    this.next = { bird: -1, owl: -1, frog: -1, drip: -1, rustle: -1, gust: 0, chat: -1, foley: 0 };
+    this.count = { bird: 0, owl: 0, frog: 0, drip: 0, rustle: 0, chatter: 0, foley: 0 };
   }
   get active() { return this.wind.playing || this.rain.playing || this.crickets.playing || this.fire.playing; }
 
@@ -885,6 +1010,7 @@ class Ambience {
     if (n.frog >= 0 && n.frog < floor) n.frog = floor;
     if (n.drip >= 0 && n.drip < floor) n.drip = floor;
     if (n.rustle >= 0 && n.rustle < floor) n.rustle = floor;
+    if (n.chat >= 0 && n.chat < floor) n.chat = floor;
     // birds
     if (E.birdRate > 0.002) {
       if (n.bird < 0) n.bird = now + rnd(0.3, 2.5);
@@ -921,6 +1047,35 @@ class Ambience {
       if (n.rustle < 0) n.rustle = now + rnd(1, 3);
       if (n.rustle < until) { rustle(k, n.rustle, rnd(-0.8, 0.8), 0.05 * rnd(0.4, 1)); this.count.rustle++; n.rustle += rnd(1.8, 5); }
     } else n.rustle = -1;
+    // villager chatter (docs/LIVING.md §11.2): talkers near the camera target, faded with distance and at night
+    const talk = Array.isArray(E.talkers) ? E.talkers : [];
+    let rate = 0;
+    if (talk.length) {
+      let chatty = 0;
+      for (const tk of talk) chatty += tk && tk.chatty ? 1.5 : 1;
+      rate = Math.min(0.8, 0.06 * talk.length) * (E.evening ? 1.5 : 1) * (chatty / talk.length) * (1 - 0.8 * (E.night || 0));
+    }
+    if (rate > 0.002) {
+      if (n.chat < 0) n.chat = now + rnd(0.2, 1.2);     // someone pipes up soon after villagers come near
+      while (n.chat < until) {
+        const end = chatter(k, n.chat, pickTalker(talk));
+        this.count.chatter++;
+        n.chat = Math.max(end + 0.12, n.chat + expRand(1 / rate));
+      }
+    } else n.chat = -1;
+    // work foley: at most one every 1.5 s, from the town's queue
+    const fq = E.foley;
+    if (Array.isArray(fq) && fq.length && now + 0.02 >= n.foley) {
+      const f = fq.shift();
+      if (f && FOLEY[f.kind]) {
+        const v = new Voice(k, 'amb');
+        const out = v.pan(clamp(Number(f.pan) || 0, -1, 1), k.bus.amb.inp);
+        FOLEY[f.kind](v, out, Math.max(now + 0.02, floor), clamp(Number(f.gain) || 0, 0, 1) * 0.5);
+        if (v.live === 0) v.done();
+        this.count.foley++;
+        n.foley = now + 1.5;
+      }
+    }
   }
 
   _call(fn, t, pan, g) {
@@ -1151,7 +1306,25 @@ function analyze(buf, bins = 0, from = 0) {
 
 const DEFAULT_ENV = () => ({
   night: 0, rain: 0, snow: 0, leaves: 0, birdRate: 0, crickets: 0, owl: 0, frogs: 0, wind: 0.5, fire: 0, firePan: 0,
+  evening: 0, talkers: [], foley: [],
 });
+
+/** One talker, the nearer (louder) ones more often. */
+function pickTalker(list) {
+  let s = 0;
+  for (const t of list) s += Math.max(0.05, Number(t?.gain) || 0);
+  let r = Math.random() * s;
+  for (const t of list) { r -= Math.max(0.05, Number(t?.gain) || 0); if (r <= 0) return t; }
+  return list[list.length - 1];
+}
+/** One utterance of ambient chatter: 3–7 syllables in the talker's voice, panned to them, on the amb bus. */
+function chatter(kit, t, tk) {
+  const v = new Voice(kit, 'amb');
+  const out = v.pan(clamp(Number(tk?.pan) || 0, -1, 1), kit.bus.amb.inp);
+  const g = 0.025 * clamp(Number(tk?.gain ?? 1), 0, 1);
+  const end = babbleOn(v, out, t, clamp(Number(tk?.pitch) || 1, 0.6, 1.6), g, 3 + ((Math.random() * 5) | 0));
+  return end;
+}
 
 // ------------------------------------------------------------------ runtime
 
@@ -1299,6 +1472,17 @@ export function init(app) {
     E.frogs = fx.pond && night > 0.5 && s !== 'winter' && !E.snow ? 1 : 0;
     E.wind = 0.55 + 0.3 * E.rain + 0.45 * E.leaves + 0.25 * E.snow + 0.1 * night;
     fireLevel();
+    // villagers (docs/LIVING.md §11.2): talkers and work foley near the camera target, from the town
+    const hr = t * 24;
+    E.evening = hr >= 17 && hr < 21.5 ? 1 : 0;
+    let a = null;
+    try { a = app.town?.audible?.() || null; } catch { a = null; }
+    E.talkers = state.chatter && a && Array.isArray(a.talkers) ? a.talkers.slice(0, 8) : [];
+    if (!state.sound) E.foley.length = 0;
+    else if (a && Array.isArray(a.foley) && a.foley.length) {
+      for (const f of a.foley) if (f && f.kind) E.foley.push(f);
+      if (E.foley.length > 3) E.foley.splice(0, E.foley.length - 3);
+    }
   }
 
   // ---------------------------------------------------------------- scheduler
@@ -1354,7 +1538,8 @@ export function init(app) {
     }
   }
 
-  events.on('sfx', (d) => { if (d && d.name) play(d.name, d.flavor); });
+  // opts (pitch, gain, pan) merge into the play options: a villager's voice, a hop beside the camera target
+  events.on('sfx', (d) => { if (d && d.name) play(d.name, d.flavor, d.opts && typeof d.opts === 'object' ? d.opts : undefined); });
 
   // ---------------------------------------------------------------- offline rendering (tests / dev)
 
@@ -1374,6 +1559,8 @@ export function init(app) {
     for (const b of ['sfx', 'amb', 'music']) setBus(k, b, LEVEL[b], 0, 0);
     const env = Object.assign(DEFAULT_ENV(), opts.env || {});
     if (opts.night) env.night = 1;
+    if (!state.chatter || !Array.isArray(env.talkers)) env.talkers = [];      // the Villager chatter switch
+    if (!Array.isArray(env.foley)) env.foley = [];
     if (what === 'music') {
       const m = new Music(k);
       m.start(settle, opts.intro ?? false);
@@ -1382,7 +1569,7 @@ export function init(app) {
       const a = new Ambience(k);
       for (let t = settle; t < seconds + settle; t += 0.25) { a.update(t, env); a.schedule(t, t + LOOKAHEAD, env); }
     } else if (SFX[what]) {
-      playSfxOn(k, what, settle, { flavor: opts.flavor, p: 1, g: 0.94, vol: 1, dir: opts.dir ?? 1, redo: opts.redo, progress: opts.progress ?? -1 });
+      playSfxOn(k, what, settle, { flavor: opts.flavor, p: 1, g: 0.94, vol: 1, dir: opts.dir ?? 1, redo: opts.redo, progress: opts.progress ?? -1, pitch: opts.pitch ?? 1, gain: opts.gain, pan: opts.pan });
     } else throw new Error('unknown sound ' + what);
     const buf = await oc.startRendering();
     const res = analyze(buf, opts.bins ?? 120, Math.floor(settle * sr) - 64);

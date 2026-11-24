@@ -17,18 +17,22 @@
 // online loads always get the server's files and the offline copy refreshes itself after them.
 // CORE must list every file the game requests (index.html, css, every js module incl. js/pieces and the
 // vendored three.js + addons, the manifest and its icons) and nothing that doesn't exist.
-const VERSION = 4;
+const VERSION = 5;
 const CACHE = `hearthwood-v${VERSION}`;
 const NET_TIMEOUT_MS = 6000;       // the page itself: a stalled connection plays from the offline copy after this
 const REFRESH_DELAY_MS = 4000;     // let the page finish loading before refreshing the offline copy
 const REFRESH_EVERY_MS = 60000;    // at most one refresh a minute
 const CORE = [
-  './index.html', './css/style.css', './css/ui.css', './manifest.webmanifest',
+  './index.html', './css/style.css', './css/ui.css', './css/town.css', './manifest.webmanifest',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png',
   './js/main.js', './js/config.js', './js/state.js', './js/catalog.js', './js/geom.js', './js/materials.js',
   './js/world.js', './js/batcher.js', './js/camera.js', './js/builder.js', './js/effects.js', './js/storage.js',
   './js/thumbs.js', './js/env.js', './js/audio.js', './js/ui.js', './js/blueprints.js',
-  './js/pieces/floors.js', './js/pieces/walls.js', './js/pieces/roof.js', './js/pieces/decor.js',
+  './js/pieces/floors.js', './js/pieces/walls.js', './js/pieces/roof.js', './js/pieces/decor.js', './js/pieces/gifts.js',
+  // the Living Town (docs/LIVING.md §12.1): 14 modules
+  './js/town/index.js', './js/town/data.js', './js/town/rng.js', './js/town/homes.js', './js/town/nav.js',
+  './js/town/recipes.js', './js/town/wishes.js', './js/town/model.js', './js/town/sim.js', './js/town/store.js',
+  './js/town/look.js', './js/town/render.js', './js/town/actors.js', './js/town/hud.js',
   './js/vendor/three.module.min.js', './js/vendor/addons/BufferGeometryUtils.js',
 ];
 const SCOPE = new URL('./', self.location).href;

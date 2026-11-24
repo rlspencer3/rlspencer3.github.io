@@ -1,0 +1,385 @@
+/* Hearthwood — Living Town styling (js/town/hud.js, plus the town bits ui.js adds: toast actions, the Town menu
+   row, the Village settings, gift ribbons). Uses css/ui.css's tokens (--paper, --sh, --sh-sm, --ease, --spring,
+   --tray-h, --rail-w) and css/style.css's --safe-*. Every element here hides in photo mode (.hw-hide-photo) and every
+   tap target is at least 44 px (visible size or a ::after hit area). docs/LIVING.md §10. */
+
+@property --cozy { syntax: '<number>'; inherits: true; initial-value: 0; }
+@property --flare { syntax: '<number>'; inherits: true; initial-value: 0; }
+
+/* ---------------------------------------------------------------- bubbles (§10.1) */
+
+/* one layer under the top bar, rail and tray (z 20); bubbles are placed with transform only (no layout) */
+.hw-tbubbles { position: absolute; inset: 0; z-index: 15; pointer-events: none; overflow: hidden; contain: strict; }
+.hw-tbubbles.is-off, .hw.sheet-open .hw-tbubbles { visibility: hidden; }
+.hw-tbubbles .hw-bubble { pointer-events: auto; }
+/* aiming a piece or drawing a stroke: the finger is building, so bubbles never catch it */
+.hw-tbubbles.is-passive .hw-bubble { pointer-events: none !important; }
+
+.hw-bubble {
+  position: absolute; left: 0; top: 0; width: 38px; height: 46px; padding: 0; margin: 0;
+  transform-origin: 0 0; will-change: transform; touch-action: none;
+  -webkit-user-select: none; user-select: none; transition: opacity 0.25s;
+}
+.hw-bubble.is-hid { visibility: hidden; pointer-events: none !important; }
+.hw-bubble.is-dim { opacity: 0.4; }
+.hw-bubble::after { content: ""; position: absolute; left: -5px; top: -5px; width: 48px; height: 48px; border-radius: 50%; }   /* 48 px hit area */
+.hw-bubble-c {
+  position: absolute; left: 0; top: 0; width: 38px; height: 38px; border-radius: 50%;
+  display: grid; place-items: center; background: #fffdf8;
+  box-shadow: 0 0 0 2px rgba(227, 181, 90, 0.55) inset, 0 2px 0 rgba(120, 82, 44, 0.14), 0 5px 14px rgba(70, 45, 20, 0.22);
+  animation: hw-tbob 2.4s ease-in-out infinite;
+}
+/* the tail: its tip is the bubble's bottom-centre, which sits exactly on the anchor */
+.hw-bubble-c::before {
+  content: ""; position: absolute; left: 13px; top: 31.5px; width: 12px; height: 12px; z-index: -1;
+  background: inherit; border-radius: 0 0 3px 0; transform: rotate(45deg);
+  box-shadow: 2px 2px 4px rgba(70, 45, 20, 0.16);
+}
+.hw-bubble-ic { position: relative; font-size: 22px; line-height: 1; pointer-events: none; }
+.hw-bubble-badge {
+  position: absolute; right: -7px; top: -6px; min-width: 19px; height: 19px; padding: 0 5px; border-radius: 10px;
+  display: none; place-items: center; font-size: 11px; font-weight: 800; line-height: 1; color: #fff8ee;
+  background: var(--barn); box-shadow: 0 0 0 2px #fffdf8; pointer-events: none;
+}
+.hw-bubble.has-badge .hw-bubble-badge { display: grid; }
+.hw-bubble.has-sparkle .hw-bubble-c::after { content: "✨"; position: absolute; right: -4px; top: -6px; font-size: 13px; }
+.hw-bubble:active .hw-bubble-c { transform: scale(0.92); }
+.hw-bubble:focus-visible { outline: none; }
+.hw-bubble:focus-visible .hw-bubble-c { outline: 3px solid rgba(227, 181, 90, 0.9); outline-offset: 2px; }
+
+.hw-bubble.k-dream .hw-bubble-c { background: #ece6f2; box-shadow: 0 0 0 2px #b9a3c9 inset, 0 2px 0 rgba(107, 91, 142, 0.18), 0 5px 14px rgba(70, 45, 20, 0.18); }
+.hw-bubble.k-dream .hw-bubble-badge { background: transparent; box-shadow: none; font-size: 14px; right: -9px; top: -10px; }
+.hw-bubble.k-traveller .hw-bubble-c { background: #f4f8ee; box-shadow: 0 0 0 2px var(--sage) inset, 0 2px 0 rgba(95, 128, 80, 0.18), 0 5px 14px rgba(70, 45, 20, 0.22); }
+.hw-bubble.k-camp .hw-bubble-c { background: #f6eddc; box-shadow: 0 0 0 2px var(--wood) inset, 0 2px 0 rgba(120, 82, 44, 0.16), 0 5px 14px rgba(70, 45, 20, 0.2); }
+.hw-bubble.k-camp .hw-bubble-badge { background: var(--wood-d); }
+.hw-bubble.k-almost .hw-bubble-c { background: #ebe7e0; box-shadow: 0 0 0 2px #b9b0a3 inset, 0 2px 0 rgba(90, 80, 70, 0.14), 0 5px 14px rgba(70, 45, 20, 0.16); }
+.hw-bubble.k-almost .hw-bubble-ic { filter: saturate(0.55); }
+.hw-bubble.k-fix .hw-bubble-c { background: #fbe9bf; box-shadow: 0 0 0 2px var(--honey) inset, 0 2px 0 rgba(160, 110, 30, 0.2), 0 5px 14px rgba(70, 45, 20, 0.2); }
+.hw-bubble.k-vacancy .hw-bubble-c { background: #e5efd9; box-shadow: 0 0 0 2px var(--sage) inset, 0 2px 0 rgba(95, 128, 80, 0.2), 0 5px 14px rgba(70, 45, 20, 0.18); }
+.hw-bubble.k-gift .hw-bubble-c { background: #fbe7dd; box-shadow: 0 0 0 2px #e39a7a inset, 0 2px 0 rgba(142, 59, 50, 0.16), 0 5px 14px rgba(70, 45, 20, 0.2); }
+
+/* 💤 over a sleeping home: small, no disc, never tappable */
+.hw-bubble.k-sleep { width: 26px; height: 26px; pointer-events: none !important; }
+.hw-bubble.k-sleep::after { content: none; }
+.hw-bubble.k-sleep .hw-bubble-c {
+  width: 26px; height: 26px; background: none; box-shadow: none; animation: hw-tzzz 3.2s ease-in-out infinite;
+}
+.hw-bubble.k-sleep .hw-bubble-c::before { content: none; }
+.hw-bubble.k-sleep .hw-bubble-ic { font-size: 20px; filter: drop-shadow(0 1px 2px rgba(40, 30, 60, 0.45)); }
+
+/* nameplate "Mabel 🌷" for 4 s at move-in */
+.hw-bubble.k-nameplate { width: auto; height: 38px; pointer-events: none !important; }
+.hw-bubble.k-nameplate::after { content: none; }
+.hw-bubble.k-nameplate .hw-bubble-c {
+  position: relative; width: auto; height: 30px; padding: 0 13px; border-radius: 999px; white-space: nowrap;
+  animation: hw-tplate 4s var(--ease) both;
+}
+.hw-bubble.k-nameplate .hw-bubble-c::before { left: calc(50% - 6px); top: 21px; }
+.hw-bubble.k-nameplate .hw-bubble-ic { font-size: 14px; font-weight: 800; color: var(--ink); }
+
+/* off-screen traveller: the bubble rides the edge of the free area with an arrow pointing at them */
+.hw-bubble.is-edge { height: 38px; }
+.hw-bubble.is-edge .hw-bubble-c { animation: none; }
+.hw-bubble.is-edge .hw-bubble-c::before { content: none; }
+.hw-bubble-arrow {
+  position: absolute; left: 19px; top: 19px; width: 20px; height: 20px; margin: -10px 0 0 -10px; display: none;
+  color: #fffdf8; pointer-events: none; --arrow-r: 28px;
+}
+.hw-bubble-arrow svg {
+  width: 100%; height: 100%; fill: currentColor; stroke: rgba(91, 63, 42, 0.7); stroke-width: 2; stroke-linejoin: round;
+  overflow: visible; filter: drop-shadow(0 1px 2px rgba(40, 25, 10, 0.35));
+}
+.hw-bubble.is-edge .hw-bubble-arrow { display: block; }
+/* a passer-by has no bubble: only a small paper disc with the arrow, while off-screen */
+.hw-bubble.k-passerby { width: 30px; height: 30px; pointer-events: none !important; }
+.hw-bubble.k-passerby .hw-bubble-arrow { --arrow-r: 22px; }
+.hw-bubble.k-passerby::after { content: none; }
+.hw-bubble.k-passerby .hw-bubble-c { width: 30px; height: 30px; background: rgba(253, 249, 241, 0.94); animation: none; box-shadow: 0 0 0 1.5px var(--line-2) inset, 0 3px 8px rgba(70, 45, 20, 0.2); }
+.hw-bubble.k-passerby .hw-bubble-c::before { content: none; }
+.hw-bubble.k-passerby .hw-bubble-ic { font-size: 14px; }
+.hw-bubble.k-passerby .hw-bubble-arrow { left: 15px; top: 15px; width: 16px; height: 16px; margin: -8px 0 0 -8px; }
+
+/* gone with a flourish: 💛 floats up when granted, 🙂 shrinks away when a wish fades */
+.hw-bubble-ghost { pointer-events: none !important; }
+.hw-bubble-ghost::after { content: none; }
+.hw-bubble-ghost.is-granted .hw-bubble-c { animation: hw-tgranted 1.2s var(--ease) forwards; background: #fff3f0; }
+.hw-bubble-ghost.is-faded .hw-bubble-c { animation: hw-tfaded 1.1s ease-in forwards; }
+
+@keyframes hw-tbob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+@keyframes hw-tzzz { 0%, 100% { transform: translate(0, 0); opacity: 0.85; } 50% { transform: translate(2px, -4px); opacity: 1; } }
+@keyframes hw-tplate { 0% { opacity: 0; transform: translateY(6px) scale(0.9); } 8% { opacity: 1; transform: none; } 88% { opacity: 1; } 100% { opacity: 0; transform: translateY(-6px); } }
+@keyframes hw-tgranted { 0% { transform: scale(1); opacity: 1; } 30% { transform: translateY(-8px) scale(1.15); } 100% { transform: translateY(-46px) scale(0.9); opacity: 0; } }
+@keyframes hw-tfaded { 0% { transform: scale(1); opacity: 1; } 40% { transform: scale(1.05); } 100% { transform: scale(0.1); opacity: 0; } }
+
+/* ---------------------------------------------------------------- hearth chip (§10.3, §9.3) */
+
+.hw-hearth {
+  --cozy: 0; --flare: 0;
+  flex: none; position: relative; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center;
+  background: rgba(253, 249, 241, 0.94); box-shadow: var(--sh-sm); color: var(--ink);
+  filter: drop-shadow(0 0 calc(2px + 10px * var(--cozy) + 6px * var(--flare)) rgba(255, 160, 56, calc(0.35 + 0.5 * var(--cozy) + 0.15 * var(--flare))));
+  transition: --cozy 0.9s var(--ease), transform 0.15s var(--ease);
+}
+.hw-hearth[hidden] { display: none; }
+.hw-hearth::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; }   /* 44 px hit area */
+.hw-hearth:active { transform: scale(0.9); }
+.hw-hearth-svg { width: 30px; height: 30px; display: block; overflow: visible; pointer-events: none; }
+.hw-hearth-flame { transform-box: fill-box; transform-origin: 50% 100%; transform: scale(calc(0.55 + 0.6 * var(--cozy) + 0.25 * var(--flare))); }
+.hw-hearth-glow { transform-box: fill-box; transform-origin: 50% 70%; opacity: calc(0.2 + 0.8 * var(--cozy) + 0.2 * var(--flare)); transform: scale(calc(0.75 + 0.45 * var(--cozy) + 0.3 * var(--flare))); }
+.hw-hearth-flame path { transform-box: fill-box; transform-origin: 50% 100%; }
+/* Cozy 75+: the embers shimmer */
+.hw-hearth.is-glow .hw-hearth-flame path:first-child { animation: hw-tember 1.5s ease-in-out infinite; }
+.hw-hearth.is-glow .hw-hearth-flame path:last-child { animation: hw-tember 1.1s ease-in-out infinite reverse; }
+/* a wish is open somewhere: a soft ember dot, never a number */
+.hw-hearth-dot {
+  position: absolute; top: 0; right: 0; width: 10px; height: 10px; border-radius: 50%; display: none; pointer-events: none;
+  background: radial-gradient(circle at 40% 35%, #ffe08a, #f08a2c 70%); box-shadow: 0 0 0 1.5px #fffdf8, 0 0 7px 2px rgba(255, 150, 50, 0.7);
+}
+.hw-hearth.has-wish .hw-hearth-dot { display: block; animation: hw-tpulse 2s ease-in-out infinite; }
+/* every grant, move-in and fix-up: the flame flares for 1.2 s and the chip bumps */
+.hw-hearth.is-flare { animation: hw-tflare 1.2s ease-out, hw-bump 0.32s var(--ease); }
+.hw-hearth.is-new { animation: hw-tnew 1.2s var(--spring), hw-tflare 1.2s ease-out; }
+.hw-hearth-gains { position: absolute; left: 50%; top: 100%; width: 0; height: 0; pointer-events: none; }
+.hw-hearth-gain {
+  position: absolute; left: -24px; top: -2px; width: 48px; text-align: center; font-weight: 900; font-size: 14px;
+  color: #c0532f; text-shadow: 0 1px 0 #fff, 0 0 6px rgba(255, 255, 255, 0.9); animation: hw-tgain 1.4s var(--ease) forwards;
+}
+@keyframes hw-tflare { 0% { --flare: 0; } 18% { --flare: 1; } 65% { --flare: 1; } 100% { --flare: 0; } }
+@keyframes hw-tnew { 0% { transform: scale(0.2); opacity: 0; } 55% { transform: scale(1.22); opacity: 1; } 100% { transform: none; } }
+@keyframes hw-tember { 0%, 100% { transform: scale(1, 1); } 40% { transform: scale(0.94, 1.08); } 70% { transform: scale(1.04, 0.95); } }
+@keyframes hw-tpulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(0.8); opacity: 0.75; } }
+@keyframes hw-tgain { 0% { transform: translateY(14px) scale(0.7); opacity: 0; } 20% { opacity: 1; transform: translateY(6px) scale(1.1); } 100% { transform: translateY(-14px); opacity: 0; } }
+
+/* ---------------------------------------------------------------- cards (§10.2–10.4) */
+
+/* toasts stay readable over an open card (they never take taps unless they carry an action) */
+.hw.town-card-open:not(.sheet-open) .hw-topstack { z-index: 46; }
+.hw-tcatch { position: absolute; inset: 0; z-index: 44; display: none; pointer-events: auto; }
+.hw-tcatch.is-open { display: block; }
+.hw-tcatch.is-dim { background: rgba(58, 38, 20, 0.28); animation: hw-fade 0.25s; }
+.hw-tcard {
+  position: absolute; z-index: 45; display: none; flex-direction: column; pointer-events: auto; min-height: 0;
+  background: linear-gradient(180deg, #fffcf5, var(--paper)); border-radius: 22px; color: var(--ink);
+  box-shadow: 0 1px 0 #fff inset, 0 10px 30px rgba(60, 38, 18, 0.28), 0 0 0 1px rgba(112, 80, 48, 0.08);
+  transition: transform 0.25s var(--ease);
+}
+.hw-tcard.is-open { display: flex; }
+.hw-tcard.is-in { animation: hw-trise 0.32s var(--spring); }
+/* phones in portrait, tablets: a bottom card just above the tray */
+.hw-tcard[data-mode="bottom"] {
+  left: calc(var(--safe-left) + 10px); right: calc(var(--safe-right) + 10px); margin: 0 auto; max-width: 420px;
+  bottom: calc(var(--tray-h) + 10px); max-height: calc(100% - var(--tray-h) - var(--safe-top) - 70px);
+}
+/* landscape phones: a side card on the left (the rail and the tray are right and bottom) */
+.hw-tcard[data-mode="side"] {
+  left: calc(var(--safe-left) + 10px); top: calc(var(--safe-top) + 58px); width: 300px;
+  max-height: calc(100% - var(--safe-top) - 68px - var(--tray-h));
+}
+/* landscape phones have ~230 px above the tray: a tighter card */
+.hw-tcard[data-mode="side"] .hw-tc-head { padding: 9px 8px 4px 12px; }
+.hw-tcard[data-mode="side"] .hw-tc-body { gap: 5px; padding: 0 12px 10px; }
+.hw-tcard[data-mode="side"] .hw-tc-av { width: 38px; height: 38px; font-size: 20px; }
+.hw-tcard[data-mode="side"] .hw-tc-name b { font-size: 16px; }
+.hw-tcard[data-mode="side"] .hw-tc-wish { padding: 7px 8px 8px 10px; gap: 5px; }
+.hw-tcard[data-mode="side"] .hw-tc-line { padding: 3px 8px; font-size: 12.5px; }
+.hw-tcard[data-mode="side"] .hw-tc-tx { font-size: 12.5px; }
+/* desktop: floats beside what was tapped (js places it inside the free area) */
+.hw-tcard[data-mode="float"] { width: 340px; max-height: calc(100% - 150px); }
+/* the intro card: centred, like the welcome card but smaller */
+.hw-tcard.hw-tc-intro[data-mode] {
+  inset: 0; margin: auto; width: min(340px, calc(100% - 32px)); height: fit-content; max-height: calc(100% - 32px);
+}
+.hw-tcard.hw-tc-intro .hw-tc-x { display: none; }
+
+.hw-tc-head {
+  flex: none; display: flex; align-items: center; gap: 10px; padding: 12px 10px 6px 14px; touch-action: none; position: relative;
+}
+.hw-tcard[data-mode="bottom"] .hw-tc-head::before {   /* grip: swipe down to close */
+  content: ""; position: absolute; top: 5px; left: 50%; width: 34px; height: 4px; margin-left: -17px; border-radius: 3px; background: rgba(122, 82, 51, 0.2);
+}
+.hw-tc-head > :first-child { flex: 1 1 auto; min-width: 0; }
+.hw-tc-x { flex: none; width: 44px; height: 44px; box-shadow: var(--sh-sm); }
+.hw-tc-x .hw-ic { width: 20px; height: 20px; }
+.hw-tc-body {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y;
+  display: flex; flex-direction: column; gap: 8px; padding: 2px 14px 14px;
+}
+.hw-tcard .hw-pill { min-height: 44px; padding: 0 14px; font-size: 13.5px; }
+.hw-tcard .hw-pill::after { top: 0; bottom: 0; }
+
+.hw-tc-who { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.hw-tc-av {
+  flex: none; width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; font-size: 24px; line-height: 1;
+  box-shadow: 0 0 0 3px #fffdf8, 0 0 0 4.5px rgba(112, 80, 48, 0.2), 0 3px 8px rgba(70, 45, 20, 0.2);
+}
+.hw-tc-name { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.hw-tc-name b { font-size: 18px; letter-spacing: 0.1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hw-tc-name small { font-size: 12.5px; font-weight: 700; color: var(--ink-soft); }
+.hw-tc-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.hw-tc-title > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.hw-tc-title b { font-size: 15px; line-height: 1.25; }
+.hw-tc-title small { font-size: 12px; font-weight: 700; }
+.hw-tc-big {
+  flex: none; width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; font-size: 22px;
+  background: var(--paper-3); letter-spacing: -4px;
+}
+.hw-tcard.k-almost .hw-tc-big { background: #ebe7e0; }
+.hw-tcard.k-fix .hw-tc-big { background: #fbe9bf; }
+.hw-tcard.k-vacancy .hw-tc-big { background: #e5efd9; font-size: 18px; }
+.hw-tcard.k-camp .hw-tc-big { background: #f2e6cf; }
+
+.hw-tc-row { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.hw-tc-tx { flex: 1 1 auto; min-width: 0; font-size: 13.5px; font-weight: 700; line-height: 1.3; }
+.hw-tc-ic { width: 44px; height: 44px; font-size: 18px; box-shadow: var(--sh-sm); }
+.hw-tc-wish {
+  display: flex; flex-direction: column; gap: 8px; padding: 10px 10px 10px 12px; border-radius: 16px;
+  background: #fff7e3; box-shadow: 0 0 0 1.5px rgba(227, 181, 90, 0.55) inset;
+}
+.hw-tc-wish .hw-tc-tx { font-size: 14px; }
+.hw-tc-wish.is-dream { background: #f1ecf6; box-shadow: 0 0 0 1.5px rgba(185, 163, 201, 0.7) inset; }
+.hw-tc-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.hw-tc-acts-end { justify-content: flex-end; }
+.hw-tc-piece {
+  display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 0 10px; border-radius: 999px; margin-right: auto;
+  font-size: 12.5px; font-weight: 800; color: var(--wood-d); background: var(--paper-3); white-space: nowrap;
+}
+.hw-tc-faded .hw-tc-tx { color: var(--ink-soft); font-style: italic; }
+.hw-tc-line { margin: 0; padding: 6px 10px; border-left: 3px solid var(--honey-l); font-size: 13.5px; line-height: 1.4; color: #5b4a3c; font-style: italic; }
+.hw-tc-foot { border-top: 1.5px dashed var(--line); padding-top: 6px; }
+.hw-tc-foot .hw-tc-tx { font-size: 13px; color: var(--ink-soft); }
+
+/* town card */
+.hw-tc-cozy { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.hw-tc-cozy b { font-size: 17px; white-space: nowrap; }
+.hw-tc-bar { height: 10px; width: 100%; max-width: 220px; }
+.hw-tc-bar i { background: linear-gradient(90deg, #f2c36b, #f0924a 60%, #d8613a); }
+.hw-tc-sub { margin: 0; font-size: 12.5px; font-weight: 700; color: var(--ink); line-height: 1.35; }
+.hw-tc-note { margin: 0; font-size: 12.5px; color: var(--ink-soft); line-height: 1.4; }
+.hw-tc-boot { margin: 0; padding: 7px 10px; border-radius: 12px; font-size: 12.5px; font-weight: 700; background: #eef5e6; color: #3f5d34; }
+.hw-tc-full { margin: 0; font-size: 13px; font-weight: 800; color: var(--sage-d); }
+.hw-tc-sec { display: flex; flex-direction: column; gap: 4px; }
+.hw-tc-sec h4 { margin: 4px 0 0; font-size: 11.5px; font-weight: 800; color: var(--wood); text-transform: uppercase; letter-spacing: 0.6px; }
+.hw-tc-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.hw-tc-chip {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 12px 0 6px; border-radius: 999px;
+  background: #fffdf8; box-shadow: 0 0 0 1.5px var(--line-2) inset, 0 2px 0 rgba(120, 82, 44, 0.1); font-weight: 800; font-size: 13px;
+  transition: transform 0.12s var(--ease);
+}
+.hw-tc-chip:active { transform: scale(0.95); }
+.hw-tc-chip-av { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-size: 16px; box-shadow: 0 0 0 2px #fffdf8; }
+.hw-tc-camp { font-size: 12.5px; font-weight: 800; color: var(--wood-d); padding: 0 4px; }
+.hw-tc-item { border-top: 1.5px dashed var(--line); padding-top: 4px; }
+.hw-tc-item .hw-tc-tx { font-size: 13px; font-weight: 700; }
+.hw-tc-flow { padding: 4px 6px 4px 10px; border-radius: 14px; background: #eef3f8; }
+.hw-tc-day { margin: 2px 0 0; text-align: center; font-size: 12px; font-weight: 700; color: var(--ink-soft); }
+.hw-tc-miss { margin: 0; padding: 0 0 0 4px; list-style: none; display: flex; flex-direction: column; gap: 2px; font-size: 13px; font-weight: 700; }
+.hw-tc-shed { color: var(--ink-soft); }
+.hw-tc-intro-acts { flex-direction: column; align-items: stretch; }
+.hw-tc-intro .hw-tc-title b { font-size: 16px; }
+
+/* ---------------------------------------------------------------- gift card (§10.4) */
+
+.hw-tgift {
+  position: absolute; z-index: 43; display: none; align-items: center; gap: 12px; pointer-events: auto;
+  left: calc(var(--safe-left) + 10px); right: calc(var(--safe-right) + 10px); margin: 0 auto; max-width: 400px;
+  bottom: calc(var(--tray-h) + 10px); padding: 10px 12px 10px 10px; border-radius: 22px;
+  background: linear-gradient(180deg, #fffaf0, #fbeee0); box-shadow: 0 0 0 1.5px rgba(227, 154, 122, 0.5) inset, 0 10px 28px rgba(60, 38, 18, 0.26);
+}
+.hw-tgift.is-open { display: flex; animation: hw-trise 0.4s var(--spring); }
+.hw-tgift-thumb {
+  position: relative; flex: none; width: 72px; height: 72px; border-radius: 16px; display: grid; place-items: center;
+  background: linear-gradient(180deg, #fff, var(--paper-2)); box-shadow: 0 0 0 1.5px var(--line) inset;
+}
+.hw-tgift-thumb img { position: absolute; inset: 4px; width: calc(100% - 8px); height: calc(100% - 8px); object-fit: contain; opacity: 0; transition: opacity 0.25s; }
+.hw-tgift-thumb.has-img img { opacity: 1; }
+.hw-tgift-thumb.has-img .hw-card-emoji { opacity: 0; }
+.hw-tgift-tx { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.hw-tgift-tx b { font-size: 14.5px; line-height: 1.25; }
+.hw-tgift-tx .hw-tc-acts { margin-top: 4px; }
+.hw-tgift .hw-pill { min-height: 44px; padding: 0 14px; font-size: 13.5px; }
+
+/* ---------------------------------------------------------------- Show me checklist chip (§10.4) */
+
+.hw-tcheck {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-height: 40px; padding: 0 2px 0 14px; border-radius: 999px;
+  background: #fff7e3; color: var(--ink); font-weight: 800; font-size: 13px; pointer-events: auto;
+  box-shadow: 0 0 0 1.5px rgba(227, 181, 90, 0.7) inset, var(--sh-sm); animation: hw-drop 0.3s var(--ease);
+}
+.hw-tcheck[hidden] { display: none; }
+.hw-tcheck-tx { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hw-tcheck-x { position: relative; flex: none; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; color: var(--ink-soft); }
+.hw-tcheck-x::after { content: ""; position: absolute; inset: -4px; }   /* 44 px */
+.hw-tcheck-x .hw-ic { width: 18px; height: 18px; }
+
+/* ---------------------------------------------------------------- toasts with an action (ui.js toast(…, action)) */
+
+.hw-toast.has-act {
+  pointer-events: auto; display: flex; align-items: center; gap: 10px; text-align: left; padding: 5px 5px 5px 14px;
+}
+.hw-toast.has-act > span { flex: 1 1 auto; min-width: 0; }
+.hw-toast-act {
+  position: relative; flex: none; min-height: 36px; padding: 0 13px; border-radius: 999px; white-space: nowrap;
+  font-weight: 800; font-size: 13px; color: #fff8ee; background: linear-gradient(180deg, #c45446, var(--barn));
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.28) inset, 0 2px 0 var(--barn-d);
+}
+.hw-toast-act::after { content: ""; position: absolute; left: -3px; right: -3px; top: -4px; bottom: -4px; }   /* 44 px */
+.hw-toast-act:active { transform: translateY(1px); }
+.hw-toast.is-success .hw-toast-act { background: linear-gradient(180deg, #7f9f6a, var(--sage-d)); box-shadow: 0 1px 0 rgba(255, 255, 255, 0.28) inset, 0 2px 0 #4c6a40; }
+
+/* ---------------------------------------------------------------- menu, settings, tray (ui.js) */
+
+.hw-tile-town { grid-column: 1 / -1; min-height: 60px; background: linear-gradient(135deg, #fff7e8, #fcebd2); }
+.hw-tile-town .hw-tile-ic { background: #fde3c4; }
+.hw-set-note { margin: -6px 0 2px 36px; font-size: 12px; color: var(--ink-soft); line-height: 1.35; }
+.hw-set-off { font-size: 11.5px; font-weight: 700; color: var(--barn-d); margin-left: 4px; }
+.hw-welcome-town { margin: -8px auto 14px; max-width: 290px; font-size: 13.5px; font-weight: 700; color: var(--sage-d); line-height: 1.35; }
+.hw-info-tx .hw-info-gift { font-size: 12.5px; font-weight: 800; color: var(--barn-d); }
+@media (orientation: landscape) and (max-height: 540px) {
+  .hw-welcome-town { grid-column: 2; margin: 3px 0 0; max-width: none; font-size: 13px; }
+  .hw-welcome:has(.hw-welcome-town) .hw-welcome-art { grid-row: 1 / 4; }
+}
+.hw-card-gift::before {
+  content: "🎁 New"; position: absolute; z-index: 2; top: -5px; left: -4px; padding: 2px 6px; border-radius: 8px 8px 8px 3px;
+  font-size: 9.5px; font-weight: 800; color: #fff8ee; background: var(--barn); box-shadow: 0 2px 4px rgba(142, 59, 50, 0.3); pointer-events: none;
+}
+.hw-tab, .hw-catbtn, .hw-catopt { position: relative; }
+.hw-tab-dot {
+  position: absolute; top: 5px; right: calc(50% - 19px); width: 9px; height: 9px; border-radius: 50%;
+  background: var(--barn); box-shadow: 0 0 0 2px var(--paper); pointer-events: none;
+}
+.hw-catbtn .hw-tab-dot { top: 4px; right: 6px; }
+
+/* ---------------------------------------------------------------- a11y */
+
+.hw-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+
+/* ---------------------------------------------------------------- the top bar with a hearth */
+
+/* The hearth sits after the piece counter (§10.3, D19). Phones fit menu, counter, hearth, floor control and undo / redo
+   in one row by slimming while the hearth shows: tighter gaps and side padding, a slimmer counter, the floor control's
+   arrows 38 px wide (34 px at ≤ 390 px; each keeps a 44 px hit area reaching over the label) and no floor stack bars
+   beside its name, so a four-digit count still fits at 371 px.
+   The ≤ 370 px rule of ui.css still hides the counter; at 300 px and less the hearth hides instead (the 🔥 Town row in
+   Menu is there at every width). */
+@media (min-width: 301px) and (max-width: 480px) {
+  .hw.has-hearth .hw-top { gap: 3px; padding-left: calc(var(--safe-left) + 6px); padding-right: calc(var(--safe-right) + 6px); }
+  .hw.has-hearth .hw-top-l, .hw.has-hearth .hw-top-r { gap: 3px; }
+  .hw.has-hearth .hw-count { padding: 0 7px 0 5px; gap: 2px; }
+  .hw.has-hearth .hw-lv-btn { width: 38px; position: relative; }
+  .hw.has-hearth .hw-lv-btn::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; right: -6px; }   /* 44 px, reaching */
+  .hw.has-hearth .hw-lv-btn:last-child::after { left: -6px; right: 0; }                                              /* over the label */
+  .hw.has-hearth .hw-lv-stack { display: none; }
+}
+@media (min-width: 301px) and (max-width: 390px) {
+  .hw.has-hearth .hw-count { font-size: 12px; padding: 0 6px 0 4px; }
+  .hw.has-hearth .hw-count-ic { font-size: 13px; }
+  .hw.has-hearth .hw-lv-btn { width: 34px; }
+  .hw.has-hearth .hw-lv-btn::after { right: -10px; }
+  .hw.has-hearth .hw-lv-btn:last-child::after { left: -10px; right: 0; }
+  .hw.has-hearth .hw-lv-name { font-size: 13px; }
+}
+@media (max-width: 300px) {
+  .hw-hearth { display: none !important; }
+}
+
+@keyframes hw-trise { from { opacity: 0; transform: translateY(16px) scale(0.97); } to { opacity: 1; transform: none; } }

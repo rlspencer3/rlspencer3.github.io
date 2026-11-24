@@ -66,7 +66,7 @@ four work packages build against are §12 (contracts) and §13 (who owns which f
 | D16 | Wish pacing | ≤ 3 open in town (the camp's single bubble is outside the cap), 40 s town-wide spacing, 15 min life (25 min for L), dreams at night (experience); multi-piece wishes show a checklist (review) | Keeps wishes from feeling like a to-do list, and a pinned night still has goals. |
 | D17 | Gifts | Fixed schedule on town grants #2, 4, 7, 10, 14, 18, 23, 28, 34, 40 (systems); every gift has a use (experience) | Testable, no bad luck, and gifts feed the routines. |
 | D18 | Cozy | Warmth stock (earned, tapering near the top, drifting) + Charm (decor kinds summed over homes on a soft curve) with a population-based floor | A new home never lowers Cozy, every new kind of decor still counts, a neglected town is only quieter, and the hearth never pins at 100. |
-| D19 | Hearth | Its own chip after the piece counter (systems) | The counter hides at ≤ 370 px, and the hearth must stay. |
+| D19 | Hearth | Its own chip after the piece counter (systems) | The counter hides at ≤ 370 px, and the hearth must stay. Above 370 px both stay: the top bar slims while the hearth shows (§10.3, R1 T1.8). |
 | D20 | Card portrait | CSS circle in the outfit colour with the job emoji (experience) | No change to thumbs.js and no GPU cost. |
 | D21 | Tapping villagers | The town wraps `rig.onTap` / `rig.onPress` / `rig.onAimEnd`; builder.js is untouched (systems). With the Build tool only a tap on a villager's body selects them, and a tap on a Show me spot always builds (review) | Press-and-hold and draw strokes keep building, building near villagers never opens cards, and no core file is edited. |
 | D22 | Saves | One device-level key `hearthwood.town.v1` (both) | No slot load, share code or clear can delete a villager. |
@@ -101,14 +101,14 @@ four work packages build against are §12 (contracts) and §13 (who owns which f
 | t | What happens |
 |---|---|
 | 0:00 | Welcome lot as today. While villagers are on, the welcome card gains one line: *"Build a home with a bed and someone may move in."* |
-| 0:12 | **Passer-by** (§4.7): a figure with a backpack comes off the country lane, walks along the front edge of the lot and steps onto the welcome lot's stepping stones at (2, 9), in the free part of a portrait screen **[verified]**. Toast: *"🎒 A traveller passes by… build a home with a bed and someone might stay. **[👀 Watch]**"*. While they are off-screen an edge arrow points at them. |
+| 0:12 | **Passer-by** (§4.7): a figure with a backpack comes off the country lane, walks along the front edge of the lot and steps onto the welcome lot's stepping stones at (2, 7) (§4.7: two stones up the path from the front row), in the free part of a portrait screen **[verified]**. Toast: *"🎒 A traveller passes by… build a home with a bed and someone might stay. **[👀 Watch]**"*. While they are off-screen an edge arrow points at them. |
 | 0:48 | About 36 s after appearing (57 m at 1.6 m/s) they reach the stones, turn to face the camera and wave (♪ cue), look round the lot for 2 s, then walk back the way they came. They are on a portrait screen for about 12 s. |
 | 0:50 | The player stamps the Timber-Frame Cottage (Place it instantly). The pop-in cascade lasts about 2 s. |
 | 0:51 | 0.3 s after the burst the town recomputes. The cottage is a Home (1 bed) and fits Gardener, Beekeeper and Baker **[verified]**; Gardener scores highest. |
 | 0:56 | `FIRST_ARRIVAL_DELAY` 5 s later: toast *"🎒 Someone's coming up the lane to your new home… [👀 Watch]"*. **Mabel** (straw sun hat, sage smock, watering can, backpack) appears on the lane at `LANE[2]` (−37, −8). Her shaders were compiled behind the loading screen, so nothing stutters (§12.8). |
 | 1:22 | About 26 s later (17.7 m of lane plus about 22 m on the lot at 1.6 m/s) she reaches the doorstep, knocks (two wood taps) and fades through the door. A ring of chimney puffs, warm light blooming in the door and windows for 2.5 s (visible at noon, §4.6), hearts rise, `move-in` jingle. Toast *"🏡 Mabel the Gardener moved into the thatched cottage!"*. The **hearth** chip appears beside the piece counter with a one-time tip. |
-| 1:28 | She steps out, waves and waters the lavender (drop cues). |
-| 1:58 | First wish, 30 s after stepping out: a 🪑 bubble pops over her head with a soft `wish` blip. |
+| 1:28 | She steps out, waves and waters the bloom nearest the door (drop cues) for 20–30 s (`FIRST_CHORE`), before the routine (lunch included) takes over, so the payoff stays where the move-in happened (M2 feel check). |
+| 1:58 | First wish, 30 s after stepping out: a 🪑 bubble pops over her head with a soft `wish` blip. A villager's first wish is always a small one: a one-piece S wish outdoors with its spot within `FIRST_WISH_NEAR` (4) cells of a door, so it takes 3 taps (§7.4). |
 | 2:02 | Tap the bubble → villager card: *"A bench by my door, for morning tea."* → **🪑 Show me** → the camera turns to face the door and eases in, a golden ring and a glowing ghost bench mark the best spot, and the Garden Bench is in hand. |
 | 2:05 | Tap the ring or the ghost → the bench lands exactly there (§7.6), and 0.3 s later the wish is granted: Mabel hurries over, hops, hearts, `wish-granted` chime, the hearth flares. Toast *"💛 Mabel: "It's perfect. Thank you!" · Cozy +5"*. |
 | 2:10 | Mabel sits down on that bench with her tea: a granted piece is used within `GRANT_USE` (2 min) whatever the phase (§5.3). |
@@ -338,8 +338,12 @@ lines are season-neutral.
    are never floor cells by themselves. In addition, a **ground floor** cell is a level-0 lot cell without a
    `foundation` / `floor` that either
    * (a) lies in a **pocket**: flood the 22 × 22 nav area at level 0 from the 1-cell ring across every edge that isn't
-     *sealed* (a `wall` or `door` edge, or a low-roof edge as defined in step 9, seen from either side). Unreached lot
-     cells, grouped 4-connected across unsealed edges, form pockets; pockets of ≤ `POCKET_MAX` (64) cells count; or
+     *sealed* (a `wall` or `door` edge, or a low-roof edge as defined in step 9, seen from either side). An **open
+     doorway** counts as sealed for this flood: an unsealed edge that is the only way from the ring into ≤ `POCKET_MAX`
+     lot cells (a bridge of the lot graph over unsealed edges, the ring merged into one node; found with one Tarjan
+     pass, O(cells)) leaves the cells behind it unreached (R1 T1.1: walls on grass with an open doorway and one missing
+     roof panel are then a home with one forgiven flaw, not a 3-cell shed). Unreached lot cells, grouped 4-connected
+     across unsealed edges, form pockets; pockets of ≤ `POCKET_MAX` (64) cells count; or
    * (b) is **roofed** (step 4) and belongs to a group of roofed level-0 non-floor cells (4-connected across unsealed
      edges, ≤ 64 cells) that touches at least one `wall` or `door` edge.
 
@@ -444,6 +448,9 @@ Appendix A):
 | G7 lean-to on grass: 2 × 1, walls on 3 sides, flat roof, open front, no bed | — | | | | | | | no building (a veranda) | |
 | G8 gazebo: 4 posts and a flat roof on grass, a bench under it | — | | | | | | | no building | |
 | G9 SMALL_HOME + a walled 3 × 3 grass yard with a door | 4 | 0 | 1 | 1 | 1 | 0 | 0 | **yes**; the yard is an uncovered room (outdoors) | (0, 2) |
+| G10 G5 − the roof panel at (1, 1) (R1 T1.1) | 4 ground | 0 | 1 | 1 | 1 doorway | 0 | 1 | **yes** (forgiven) | (0, 2) |
+| G11 G5 − the roof panel over the doorway's own cell (0, 1) | 4 ground | 0 | 1 | 1 | 1 doorway | 0 | 1 | **yes** (forgiven) | (0, 2) |
+| G12 a walled 3 × 3 grass yard with one open gap, no roof | — | | | | | | | no building (an uncovered room, outdoors) | |
 
 Cost **[verified]**: detection 0.1–0.6 ms per blueprint lot with the original rule; with this rule the string-keyed
 prototype takes 0.8–1.2 ms (detect) + 0.2–0.45 ms (nav) on the farmhouse, averaged over 20 runs (two runs). The
@@ -540,9 +547,9 @@ cottage again, and switching between two saved builds puts everyone back where t
 
 | Bubble | Shown when | Card text | Show me |
 |---|---|---|---|
-| **almost** (grey; icon of the first missing thing) | a building (or an uncovered room with ≥ 50 % of its boundary walled) of ≥ 4 cells, no residents, not a Home, unchanged for `ALMOST_DELAY` (8 s), **and** either (≥ 50 % of its cells roofed and it has a door or doorway) or it holds a bed. Never for a bedless building of ≤ `SHED_CELLS` (6) cells, a muted footprint, or in guided mode. Shown once per building (matched by footprint overlap ≥ 0.3, remembered for the session) for `ALMOST_SHOW` (60 s); after that it is only listed on the town card. ≤ 3 at a time | first missing, in this order: 🚪 *"Needs a way in: swap a wall for a door"* · 🧱 *"A gap in the walls (n)"* · 🏠 *"A hole in the roof (n cells)"* or *"The bedroom upstairs needs a roof"* · 🛏️ *"Almost a home: add a bed"*. Buttons: **Show me** and **Just a shed 🙂** (mutes this footprint for good, stored in the save's `muted`; a bed placed inside lifts the mute) | see below |
+| **almost** (grey; icon of the first missing thing) | a building (or an uncovered room with ≥ 50 % of its boundary walled) of ≥ 4 cells (any size when it holds a bed, so a bedded hut is never a silent dead end; R1 T1.1), no residents, not a Home, unchanged for `ALMOST_DELAY` (8 s), **and** either (≥ 50 % of its cells roofed and it has a door or doorway) or it holds a bed. Never for a bedless building of ≤ `SHED_CELLS` (6) cells, a muted footprint, or in guided mode. Shown once per building (matched by footprint overlap ≥ 0.3, remembered for the session) for `ALMOST_SHOW` (60 s); after that it is only listed on the town card. ≤ 3 at a time | first missing, in this order: 🚪 *"Needs a way in: swap a wall for a door"* · 🧱 *"A gap in the walls (n)"* · 🏠 *"A hole in the roof (n cells)"* or *"The bedroom upstairs needs a roof"* · 🛏️ *"Almost a home: add a bed"*. Buttons: **Show me** and **Just a shed 🙂** (mutes this footprint for good, stored in the save's `muted`; a bed placed inside lifts the mute) | see below |
 | **fix-up** 🔨 (amber) | a `waiting` resident's building for ≥ `FIXUP_DELAY` (60 s) | *"Mabel's thatched cottage needs fixing: {first missing}"* | as almost |
-| **vacancy** 🏡✨ (green) | a Home with a free bed, after the first villager, matching no job's recipe. Shown for `VACANCY_SHOW` (90 s); it comes back only when the Cozy tier changes or a piece from some recipe's item sets is placed within that recipe's radius of the home | *"Who could live here?"* plus the 3 jobs with the fewest missing items: *"🎣 Fisher: a Lily Pond within 6 cells"* | per row: the plan for its first missing piece (§7.5) |
+| **vacancy** 🏡✨ (green) | a Home with a free bed, after the first villager, matching no job's recipe. Never while someone is camping (or waiting with no building) or a binding change is still settling (§3.5): they take free beds first (§4.2), so the bubble would flash for a bed filled a moment later (R1 T1.5). Shown for `VACANCY_SHOW` (90 s); it comes back only when the Cozy tier changes or a piece from some recipe's item sets is placed within that recipe's radius of the home | *"Who could live here?"* plus the 3 jobs with the fewest missing items: *"🎣 Fisher: a Lily Pond within 6 cells"* | per row: the plan for its first missing piece (§7.5) |
 
 **Hint Show me** (index.js; the ghost record comes from `wishes.hintSpots`, index.js fills `h` and copies looks):
 * **door**: candidates are `lo` boundary edges holding a plain `wall` whose outside cell is walkable and in no covered
@@ -607,8 +614,10 @@ Only one new traveller walks at a time. Returns are not limited.
   lamplighter, postie.
 * The runners-up are remembered for the town card (*"Posy the Beekeeper would come too, with another bed"*).
 * **First-friend rule**: while the roster is empty, the first Home gets a traveller even if no recipe is met. Their
-  job is the one with the fewest missing items (missing = Σ over terms of `max(0, required − found)`, each INSIDE /
-  DOOR item counting 1; ties by `JOB_ORDER`), and their first wish is their odd-job wish (§2.2).
+  job is the one with the fewest missing items, counted as **unmet terms** (features) of its recipe, ties by
+  `JOB_ORDER` (M1: counting units, Σ `max(0, required − found)`, picked the Fisher on bare semis and contradicted B2 and
+  Storyboard B, which expect the Gardener). The vacancy card's "closest jobs" sort by unmet terms, then units. Their
+  first wish is their odd-job wish (§2.2).
 * After that, a Home with no matching recipe shows the vacancy bubble.
 
 ### 4.4 Pacing (town clock)
@@ -647,18 +656,23 @@ so toggling a roof can't spam arrivals. Cozy 20 gives ≈ 99 s, Cozy 80 ≈ 59 s
 | 0.6 s | Steps 0.4 m into the door plane while dither-fading (0.4 s) |
 | 1.0 s | **Lights on**: the home's door and lowest-level window openings fill with warm light and its ground spill blooms, at brightness `max(env.night, MOVEIN_GLOW)` (0.7) for 2.5 s, easing out over the last 0.8 s, so it reads at noon (§5.6). **Chimney puffs**: a ring of 8 FX puffs rising from the chimney's emitter position (else 0.5 m above the roof's highest panel over the door). Hearts rise at the door; the rest of the jingle plays |
 | 1.2 s | Toast *"🏡 Mabel the Gardener moved into the thatched cottage!"*; nameplate bubble *"Mabel 🌷"* above the roof for 4 s; event `town-movein` |
-| 1.5 s | First villager only: the hearth chip appears with a glow-up and the one-time tip *"🔥 Your town has a hearth now. It glows brighter as the town gets cosier."* |
-| 6.0 s | Steps out, waves, starts the routine (or stays in bed at night). Warmth +`COZY_MOVEIN` (4, tapered, §9.1) |
+| 1.5 s | First villager only: the hearth chip appears with a glow-up |
+| 5.7 s | First villager only: the one-time tip *"🔥 Your town has a hearth now. It glows brighter as the town gets cosier."* (it waits until the 4 s nameplate has gone, so the two never stack over it; M2). The nameplate itself drops below the toast stack when its roof anchor is in the toast band |
+| 6.0 s | Steps out, waves, then a chore by the door for 20–30 s (`FIRST_CHORE`: water the bloom nearest the main door within 3 cells, else sweep the doorstep), then the routine (or stays in bed at night). Warmth +`COZY_MOVEIN` (4, tapered, §9.1) |
 | +30 s | First wish (`FIRST_WISH_DELAY` 30 s for the town's first villager; 60 s for later ones) |
 
 ### 4.7 Passer-by (no Home on the lot)
 
 * While the lot has no Home and the roster is empty, a passer-by walks `PASSERBY_FIRST` (12 s) after `ready`, then every
-  180 s, at most 3 per session.
+  180 s, at most 3 per session. While a card covers the meadow (the first-visit welcome card, the menu sheet, a dialog:
+  index.js sets `sim.holdPasserby`), nobody sets off: the first one comes `PASSERBY_FIRST` after it closes, so a player
+  who reads the welcome card still sees the wave (M2 feel check).
 * Route: they appear on the lane at `LANE[1]` (−28, −3.5), walk to the lane cell (−11, −1), then along the ring (the
   west column, then the front row z = 10) to the **viewing spot**, and back the same way, fading out at `LANE[1]`. The
-  viewing spot is the first `PATHY` cell on the lot's front row (z = 9, lowest |x| first): the welcome lot's stepping
-  stone (2, 9). With none, it is the front ring cell (0, 10). The route is chosen from the world only (never the
+  viewing spot is the first `PATHY` cell on the lot's front row (z = 9, lowest |x| first), then up to
+  `PASSERBY_VIEW_BACK` (2) cells further along that path (straight back, while it stays `PATHY` and free): on the welcome
+  lot the stepping stones at (2, 7), beside the lamp post, mid-screen and clear of the tray (M2). With none, it is the
+  front ring cell (0, 10). The route is chosen from the world only (never the
   camera), so the sim stays deterministic.
 * On the viewing spot they face the default camera direction (+Z, toward the viewer), wave (♪ cue) for 2 s, look
   round the lot (`admire`) for 2 s, then turn back. Speed 1.6 m/s: about 36 s from the lane to the stones. On a
@@ -684,6 +698,12 @@ so toggling a roof can't spam arrivals. Cozy 20 gives ≈ 99 s, Cozy 80 ≈ 59 s
 * **Sky time** is `state.time` (0..1, 0.5 = noon). env.js advances it only while `state.timeFlow` is on; a day takes
   `DAY_SECONDS` = 600 s, so one game hour = 25 s. **Villagers read their phase from sky time**, so what the sky shows
   is what they do.
+* **The dusk lingers** (M2 feel check: by 18:30 the evening hangouts were already in full night): env.js maps sky time
+  to the sun's angle through a gentle warp, so from the Sunset preset (0.74, 17:45) the sun sinks slowly: 17:45–20:10 is
+  a long sunset into a blue dusk, then night deepens by 22:05, where the sun is back in step (`DUSK = [0.74, 0.84,
+  0.762, 0.92]`: from, slow part ends, sun time there, back in step). Every preset (Dawn, Morning, Noon, Sunset, Night)
+  looks as it always did; only the slider's in-between evening hours look different. This is the owner's call to keep
+  or drop (one constant in env.js).
 * **Town clock** (`clock`, seconds) advances by `dt × townSpeed` only while the page is visible, villagers are on, the
   module is healthy and its restore recompute has run (§3.8). Wish lifetimes, arrivals, Cozy drift, the settle and
   fix-up delays and the town day (`floor(clock / 600)`, event `town-day`) all run on it, never on wall-clock time.
@@ -719,7 +739,7 @@ Lunch is 12:00–13:00 inside `day`.
 | day | work 60, break on a seat 15, visit a working or seated villager within 15 m and chat 10–20 s 10, stroll to a pretty spot within 15 m (a bloom, tree, pond, gift or lamp) and admire 5–10 s 10, sit at a hangout 5 (bench, fire pit, tea table; the fire's evening bonus doesn't apply) | Lunch 12:00–13:00: break at the nearest SEAT_OUT within 10 cells, else DOOR1 |
 | evening | hangout 70, stroll 15, own porch 15 | Lamplighter's round first 17:30–19:30 |
 | home | inside 100 | Chatty: 30 % a doorstep chat if another home's DOOR1 is within 6 cells |
-| night | asleep in bed | **Lantern strolls**: every `NIGHT_STROLL_EVERY` (90 s of town clock) one villager (owls and stargazers first, then round-robin) gets up for `NIGHT_STROLL_LEN` (30 s): a lantern stroll along paths, a sit by the fire pit or under a lamp, or (stargazers) lying back on the grass looking up. Owls before their sleep hour: hangout at the fire pit or lamps 60, stroll with lantern 40 |
+| night | asleep in bed | **Lantern strolls**: every `NIGHT_STROLL_EVERY` (90 s of town clock) one villager (owls and stargazers first, then round-robin) gets up for `NIGHT_STROLL_LEN` (30 s): a lantern stroll along paths, a sit by the fire pit or under a lamp, or (stargazers) lying back on the grass looking up. Only a villager whose own phase is `night`, and (time flowing) at least `NIGHT_STROLL_WAKE_GAP` (2.5 h) before their wake hour; back in bed it is an ordinary night's sleep, which the wake hour ends (M2: a stroll used to end in an endless sleep that kept the villager in bed all the next day). Owls before their sleep hour: hangout at the fire pit or lamps 60, stroll with lantern 40 |
 
 **Using a granted piece** (overrides the table): for `GRANT_USE` (120 s) after a grant, the granter's next activity
 uses the granted piece, whatever the phase (asleep villagers get up for it, as a night stroll would): a seat → sit
@@ -770,7 +790,8 @@ time are offered it once (toast with action, §10.6), and the town card has a ro
 **Hangout score** = free spots × (1 + 1.0 × LAMP within 2 [evening]) × (1 + 1.5 × `fire_pit` [evening/night]) × (1 +
 0.2 × BLOOM within 2 [day]) × (1.5 for `gift_tea_table`) / (1 + walk metres / 15), then × the trait preferences. At
 most 6 villagers per hangout and 4 per plaza block. Two villagers at the same hangout, or passing within 1.6 m, face
-each other and chat (bounces, chatter, §11).
+each other and chat (bounces, chatter, §11). (M2, in actors.js: two villagers standing or sitting within 1.6 m turn
+their heads to each other and take the `chat` pose's gestures and bounces; passing, they may wave, §9.2.)
 
 ### 5.6 Lights
 
@@ -786,18 +807,24 @@ each other and chat (bounces, chatter, §11).
   lowest-level window openings, 2 cm proud of the wall on the outside) shine at `max(env.night, MOVEIN_GLOW)` (0.7),
   so "lights on" reads at noon. Spill and opening glow are one instanced mesh: one draw call for the whole town,
   hidden when nothing is lit (`night < 0.02` and no move-in glow running).
+* **Indoor glow** (M2 feel check, so a sleeper reads in the night cutaway): one more flat quad in the same mesh per Home,
+  on its lowest floor (floor + 0.04 m, 80 % of the footprint's bounding box), brightness `env.night × 0.7 × (L ≥ 0.5 ? L
+  : 4 L)`, i.e. 0.7 × night while someone is up inside and 0.42 × night while all sleep, 0 when nobody is home. Walls and
+  roofs hide it unless the cutaway opens the house.
 
 ### 5.7 Indoor poses (never walked; drawn only)
 
 * A villager inside is drawn at an indoor spot of their home, at that spot's level, **only when the level is visible**
   (`world.seeAll || level ≤ world.viewLevel`). Walls and roofs hide them otherwise.
 * Asleep → lying in **their bed**: body along the bed's local Z, head toward local −Z (the headboard), centre at local
-  (0, 0.62, −0.10), quilt over the legs (legs hidden by the lie flag).
+  (0, 0.62, −0.10), a quilt in their own outfit colour (lighter) pulled up to the chest, its top edge folded back in
+  cream (legs hidden by the lie flag). Every lying pose puts the head toward `face` (§12.3; M2 fixed actors, which had
+  it at the foot). Campers lie at the tent mouth with the head into the tent.
 * Awake in the `home` phase → seated in the first free `armchair` / `sofa` (2 seats, x ±0.4) / `rocking_chair` /
   `chair` of the home (facing local +Z, seat y 0.45); else standing 0.75 m in front of `kitchen_range` (always for the
   Baker), `desk` or `fireplace` / `wood_stove`, facing it; else standing at the centre cell of FOOT.
-* `waiting` villagers sleep on a sofa, armchair or rug spot, else lie at the building's centre cell ("a bedroll by the
-  hearth").
+* `waiting` villagers sleep on a sofa (lying along it, centred), armchair or rug spot, else lie at the building's centre
+  cell ("a bedroll by the hearth").
 * A tiny 💤 bubble shows above a sleeping home's roof when the camera target is within 25 m.
 
 ---
@@ -825,6 +852,7 @@ each other and chat (bounces, chatter, §11).
 | a roof panel in the column with `hs ≤ 1` | blocked | — |
 | solid items: every `TREE`, `pond`, `well`, `boulders`, `bush`, `fire_pit`, `birdbath`, `scarecrow`, `beehive`, `doghouse`, `woodpile`, `hay_bale`, `veggie_bed`, `pumpkins`, `picnic_table`, `bench`, `chimney`, `crate_stack`, `barrel`, `wheelbarrow`, `stairs`, `stairs_spiral`, `ladder`; **central-pole items** `lamp_post`, `mailbox`, `birdhouse`; all other `interior` furniture standing outdoors except the soft ones; gifts with `walk: 'solid'` (which include `gift_festoon` and `gift_signpost`, both poles) | blocked (seats are used from the neighbour cell, then a 0.5 m slide into the seat) | — |
 | soft items: `BLOOM` 6, `plant_pot` / `chair` 2, `rocking_chair` / `armchair` 3, `chickens` / `cat` / `dog_bed` 1.5, `clothesline` 1.2, gifts with `walk: 'soft'` 2.5 | added to the base cost | as base |
+| a cell 4-adjacent to a level-0 `BLOOM` (once per cell) | + `COST_NEAR_BLOOM` 0.3, so walkers keep a row off flower beds instead of wading through the blooms (a path beside flowers, 0.85, still beats grass) | as base |
 | a camp tent | blocked | — |
 | D-layer rugs | nothing | — |
 
@@ -887,6 +915,9 @@ every 0.25 m) fails within 0.35 m of such a vertex.
 * Cosmetic separation steering in actors (radius 0.55 m, lateral offset ≤ 0.3 m, never changes the logical position).
 * Head-on in a one-cell gap: the lower-priority walker (Shy first, else the higher id) waits 0.6 s with a little bow.
 * A second villager heading for the same doorstep waits a step back.
+* (Not built in Phase 1: the two waits above. Walks are timed plans the sim chains deterministically, so a wait has to
+  be planned by the sim, not improvised by actors; the cosmetic lateral steering keeps passing walkers apart. Left
+  for the playtest to show whether head-on meetings read badly.)
 
 ---
 
@@ -1010,6 +1041,9 @@ Job wishes (only that job; job affinity ×3):
 * `weight = base (S 1.0, M 0.8, L 0.5) × job affinity (×3 job-only, ×2 favoured, ×4 odd-job wish) × trait (×2/×3) ×
   lotFit (min(1, spots of the first part / 3)) × 0.5 if another villager holds the same template`.
 * Sample with v's seeded RNG at that tick.
+* **A villager's first wish is small** (M2 feel check, the §1.4 "3 taps"): while v has no grants and no past wishes (and
+  is not the first friend, whose odd-job wish wins), only one-piece S templates whose part is outdoors and whose planned
+  spot is within `FIRST_WISH_NEAR` (4) cells of a doorstep are sampled, when there are any.
 * Phase 3 hook: `× season(template)`, which is 1 in Phase 1.
 
 ### 7.5 Spot finder (shared by feasibility and Show me): plans
@@ -1025,10 +1059,16 @@ placing them in order always completes the wish.
   * pass `world.validate(rec).ok`;
   * not be a doorstep (solid pieces);
   * not be a floor cell of a covered room (outdoor pieces);
+  * (ordering, R1 T1.9) a solid piece that is not itself a path takes `path` / `steps` cells only after every other
+    candidate of the band (a stable re-sort), so a mailbox goes beside the front path, not on it; decks stay fine for
+    seats;
   * not cut any doorstep off from `mainRegion` (regions over walk + hop edges, §6.1): block the cell on a copy of the
     region map and re-flood; checked for the first 3 candidates only.
 * **Rotation**: a seat near a DOOR faces away from the nearest wall edge, toward open space (never at the house wall);
-  a seat by a pond faces the pond; a seat at a fire pit or table faces it; other pieces face DOOR1.
+  a seat by a pond faces the pond; a seat at a fire pit or table faces it; other pieces face DOOR1. Seats anchored on a
+  fire pit or table (`face: 'anchor'`, e.g. `w_fire_circle`'s benches) take the anchor's straight-on neighbour cells
+  first, on different sides (behind it, facing the default camera, then its sides, then in front), before any diagonal
+  cell, so they read as a circle round it (M2 feel check).
 * **Frozen route** (`w_route_lamp`): candidates are cells at d = 1 from the frozen ROUTE cells (never on them) with
   d(·, DOOR) ≥ 3, so A* re-routing round the new lamp can't undo the wish.
 * **Edge pieces**:
@@ -1043,17 +1083,26 @@ placing them in order always completes the wish.
 ### 7.6 Show me (index.js orchestrates, §12.7)
 
 1. **View first**, so the builder's own floor logic finds nothing to change and sends no toasts:
-   `state.set({ level: spot.y, seeAll: inside ? false : state.seeAll })` (outdoor spots are level 0; roof hints set
+   `state.set({ level: rec.level, seeAll: inside ? false : state.seeAll })` (a SpotPlan rec's `y` is world metres, its
+   `level` the piece level; outdoor spots are level 0; roof hints set
    `seeAll: true`).
 2. **Piece**: `builder.selectPiece(part.piece)`; for four-way pieces `state.set({ rot: rec.r })`; hint plans also set
    `mats` / `colors` / `accent` from the ghost record (§3.7). In guided mode (§4.1) Show me only frames the spot: no
    piece change and no highlight, so guided taps keep snapping to the guides.
 3. **Camera**: turn to face the spot as `blueprints.selectNext` does (angle from the home's centre; if |Δθ| > 1.2 rad,
    `rig.goal.theta += Δθ`), look down into a cutaway for INSIDE spots (`rig.goal.phi = min(rig.goal.phi, 0.9)`), then
-   `rig.focus(spot.x, spot.y + 0.5, spot.z, clamp(current radius, 14, 26))`.
+   `rig.focus(spot.x, spot.y + 0.5, spot.z, clamp(current radius, 14, 26))`. **Unhidden** (R1 T1.3): an INSIDE spot more
+   than 1.5 m from the home's middle is seen from the *far* side (the angle points from the spot toward the middle, so
+   the wall nearest the spot is not between the camera and it); then occlusion rays (`world.pick` with a
+   `THREE.Raycaster` from each candidate camera position, honouring the cutaway) go to the ghost's middle and four
+   points of its ring, over the angles (the current one when within 1.2 rad of the preferred one, the preferred one,
+   ± 90°, 180°) × phi (the usual one, then 0.6, then 0.38): the first view that sees all five points wins, else the one
+   that sees most (ties keep that order); the search stops after 60 ms on a slow phone.
 4. **Highlight**: `actors.highlight({ cells, edges, ghost })`: a pulsing golden ring on every rec of the current part
    (the later parts' cells faint) and a glowing ghost of the first missing rec (`world.buildPlaced(rec)` with
-   `materials.blueprintMat(true)`, the guided-build look).
+   `materials.blueprintMat(true)`, the guided-build look, baked into one mesh so any piece costs one draw call, R2
+   T2.4). Every plan rec carries a rotation `r` (index.js's `fullRec` defaults a missing one to 0): a rec without one
+   built a ghost with a NaN matrix, never drawn, whose NaN hit box claimed every tap on the meadow (R2 T2.1).
 5. Event `town-showme` → the hud shows the hint toast (*"🌷 Tap a glowing spot to plant a Flower Patch for Mabel"*)
    and, for a plan of more than one piece, a **checklist chip** with no timer: *"🍽️ Table ✓ · Chairs 1/2"*, with ✕.
 6. **Re-target**: after every recompute while it is up, the plan is recomputed. When a part completes, the piece in
@@ -1062,7 +1111,12 @@ placing them in order always completes the wish.
 7. **Taps on the highlight build exactly there** (§12.7).
 8. **Lifetime**: no timer. The highlight stays until the wish is granted (or the hint resolved), the wish fades or is
    dropped, the player picks another piece or tool themselves (a `pieceId` / `tool` change the town didn't make), the
-   checklist's ✕ or Esc, villagers off, photo mode, or a guide starting.
+   checklist's ✕ or Esc, villagers off, photo mode, or a guide starting. A hint is **resolved** (R1 T1.2; checked at
+   every re-target, then `town-showme-end` with `granted: true`), because the spot finder always finds another free
+   cell or wall and so the plan alone never runs out: the town card's "one more bed" row (a Home) once the home has
+   more beds than when Show me started; an almost / fix-up hint once that kind is no longer in the building's
+   `missing`, or it became a Home; the camp wish once nobody camps or the Homes' total capacity rose by the number of
+   campers at the start.
 
 Edge wishes glow the edge; `w_neighbour` and the camp wish frame a free 6 × 6 area with a Stone Foundation in hand.
 
@@ -1120,7 +1174,7 @@ of truth; gifts.js builds the geometry round those seat anchors. Each one:
 | `gift_flower_cart` | Flower Cart | Gardener | little wooden handcart on two spoked wheels, heaped with terracotta pots of pink, yellow and white blooms | `wood`, `timber`, `ceramic` (`COL.terracotta`), `petalPink`, `petalYellow`, `petalWhite`, `leaves` | 0–4 | counts as **2 BLOOM**; solid |
 | `gift_hen_house` | Hen House | Farmer | small A-frame coop on four stubby legs, a ramp with cleats, a nesting box, straw poking out | `paintedWood` (default `#b4473a`, paintable), `roofShingle`, `wood`, `hay` | 0 | counts as **FARM**; solid |
 | `gift_carved_bear` | Carved Bear | Woodcutter | chunky bear carved from a log, one paw waving, sitting on a stump with rings on top | `wood`, `bark` | 0–4 | Animal lovers stop to admire it; solid |
-| `gift_rowboat` | Little Rowboat | Fisher | pale-blue rowboat resting on the grass, crossed oars, a coil of rope | `paintedWood` (default `#8fb8c9`, paintable), `wood`, `fabric` | 0 | **1 seat**; the Fisher's favourite perch beside a pond; solid |
+| `gift_rowboat` | Little Rowboat | Fisher | duck-egg rowboat (white inside) resting on the grass, crossed oars, a coil of rope | `paintedWood` (default `#7fa7a3`, the PALETTE duck egg the blueprint doors use, paintable; `#8fb8c9` would have added a material), `wood`, `fabric` | 0 | **1 seat**; the Fisher's favourite perch beside a pond; solid |
 | `gift_honey_stand` | Honey Stand | Beekeeper | slatted crate stand with a gingham cloth, rows of honey jars with mustard cloth lids and labels, and a little painted sign | `wood`, `fabric` (`COL.mustard`, `COL.red`), `ceramic` (`COL.wax`), `paintedWood` | 0–4 | the Beekeeper's afternoon spot; solid |
 | `gift_bread_oven` | Bread Oven | Baker | domed clay oven on a stone plinth, arched mouth glowing at night, a bread peel leaning | `ceramic` (`COL.terracotta`), `stoneBlock`, `ember`, `wood`; `emitter: 'smoke'`, `emitterOffset: [0, 1.3, -0.2]` | 0 | the Baker bakes **outdoors** here (visible); solid |
 | `gift_festoon` | Festoon Lights | Lamplighter | two slim posts 1.7 m apart with a sagging string of seven warm bulbs | `timber`, `iron`, `lampGlow` | 0–4 | counts as a **LAMP** (bulbs glow with `setNight`); solid (its posts are poles, §6.1) |
@@ -1134,7 +1188,9 @@ of truth; gifts.js builds the geometry round those seat anchors. Each one:
   gift ids), then saves the town (`hearthwood.town.v1`.unlocks), then calls `catalog.setHidden(id, false)` and emits
   `town-gift`; ui.js re-renders the cards.
 * **Reading unlocks never depends on the town**: gifts.js, which main.js loads with the other piece modules whatever
-  the village setting, reads both keys in try/catch when it registers the pieces and registers every gift found in
+  the village setting, reads both keys in try/catch when it registers the pieces (even reading `localStorage` itself
+  is inside the try: with site data blocked the getter throws a SecurityError, and the gifts must still register,
+  hidden; R1 T1.11) and registers every gift found in
   either with `hidden: false`. So an unlocked gift stays in the tray if the town module fails to import, with `town=0`,
   in a showcase, with villagers off, or when the town key can't be written (localStorage is shared with up to 2 MB of
   slot thumbnails). index.js only un-hides gifts unlocked during the session.
@@ -1186,10 +1242,10 @@ plain), a bare new home adds nothing and never lowers it, and it only approaches
 and drift grows there, so Cozy settles where the player's pace puts it instead of pinning at 100.
 
 **Worked examples:**
-* The stamped Cottage at move-in: warmth 10 + 3 = 13 (the move-in's 4, tapered); S = 20 (8 outdoor kinds + 12
-  interior kinds), charm 19.5; Cozy **32** (Content).
-* Three granted wishes (S, M, M) on it: gains +5, +6, +5 → warmth 29; three new outdoor kinds, S = 23, charm 21.4;
-  Cozy **50** (Cheerful).
+* The stamped Cottage at move-in: warmth 10 + 3 = 13 (the move-in's 4, tapered); S = 23 (10 outdoor kinds incl. the
+  hedge + 13 interior kinds incl. the chimney, counted on the real stamped cottage in M1), charm 21.4; Cozy **34**
+  (Content). (The draft's S = 20 / Cozy 32 undercounted the real build; the formula is unchanged.)
+* Three granted wishes (S, M, M) on it: gains +5, +6, +5 → warmth 29; with the kinds they add, Cozy **50** (Cheerful).
 * A bare self-built home with only a bed: warmth 13, charm 0 → floor 17 (Quiet).
 * A whole 10-minute session ignoring wishes costs about 5 points low down, about 14 near the top.
 * A new bare home adds 0 charm and never lowers it.
@@ -1217,6 +1273,11 @@ checks these with `townhud=1`):
 | Wave when passing another villager | 20 % | 40 % | 60 % | 80 % |
 | Evening hangout length | −20 % | — | +20 % | +40 % |
 | Flavour lines | `quiet` pool eligible | — | — | `glowing` pool eligible |
+
+(Built in M2: the gait bob ×0.9 / 1.0 / 1.15 / 1.25 and, at Glowing, a skip every 6–12 s about half the time, in
+actors.js; a wave on passing another villager within 1.6 m, once per meeting, in actors.js (cosmetic, `Math.random`);
+humming, a ♪ cue and the `hum` foley while walking, `HUM_CHEERFUL` / `HUM_GLOWING`, in the sim; the evening hangout
+length and the line pools in the sim.)
 
 Wishes and gifts never depend on Cozy: a quiet town is just quieter, never stuck. Phase 2 hook: `town.cozy01()`
 becomes the production multiplier.
@@ -1256,6 +1317,14 @@ Strings never use pronouns (§2.4).
   `rig.insets`.
 * At most **6** tappable bubbles shown, by priority: traveller > wish > camp > fix-up > almost > vacancy > dream,
   nearest first. Up to 3 sleep 💤 bubbles. Bubbles closer than 36 px merge into one "×2" (tapping it opens the first).
+* **Wish and dream bubbles never vanish off an edge** (M2 feel check): off-screen (in front of the camera, within the
+  45 m cull) they ride the free area's edge with an arrow, as a traveller's does; on screen they are kept at least
+  24 px (× scale) inside its sides and 50 px below its top. The same keep-inside clamp holds for every other tappable
+  bubble on screen (camp, fix-up, almost, vacancy, gift, an on-screen traveller; R1 T1.10), so none sits under the top
+  bar or the hearth chip. While a toast is up, an on-screen tappable bubble whose box (38 × 46 px × scale, tail tip on
+  the anchor) overlaps it sits just below the toast stack (R2 T2.2: the one-time camp tip used to cover the very camp
+  bubble it was about) and goes back when the toast has gone. A 💤 that shares its roof anchor with a tappable bubble
+  moves 34 px aside; the move-in nameplate drops below the toast stack when its anchor is in the toast band.
 * Hidden in photo mode, while the menu sheet or a dialog is open, and with villagers off. Dimmed to 40 % while guided
   (§4.1).
 * **Gestures pass through bubbles**: every bubble gets `pointer-events: none` while `rig.mode` is `aim` or `draw`. A
@@ -1302,7 +1371,10 @@ touch.
   working round them. It ends when something else moves the target (`goal.target` differs by > 0.05 m from where
   follow put it last frame: a pan, a pinch's slide, a wheel zoom toward the cursor, a key), on a canvas tap, Esc,
   photo mode, or villagers off. When it ends, the target is clamped to `rig.bounds` (±36 m), since a traveller on the
-  lane can be past it. Watching a day is the "life you can watch" pillar in one button.
+  lane can be past it. Watching a day is the "life you can watch" pillar in one button. On a phone a pinch zooms and a
+  twist turns round the followed villager (not round the point between the fingers), and a one-finger orbit keeps
+  them as its pivot; only a two-finger **slide** (the finger midpoint moving 24 px more than half the pinch's own
+  change) ends Follow (R1 T1.4; §12.7).
 * A wish that just faded shows *"Never mind, maybe another time!"* for 60 s.
 * **Layout**:
   * portrait: bottom card above the tray, max 420 px wide;
@@ -1318,12 +1390,16 @@ touch.
   * While any wish is open, a soft ember dot glows at its corner (no number: the count lives on the town card).
   * At ≤ 300 px wide the chip hides. The **🔥 Town** row in Menu (first row of `pageMain`) is there at every width
     while the town is enabled.
-  * The ≤ 370 px rule that hides `.hw-count` stays as is; the chip is a separate element.
+  * The ≤ 370 px rule that hides `.hw-count` stays as is; the chip is a separate element. The counter stays beside the
+    hearth everywhere else: at 301–480 px (≤ 390 px a little more) town.css slims the top bar while the hearth shows
+    (3 px gaps, 6 px side padding, a slimmer counter, floor arrows 38 / 34 px wide whose hit areas reach 44 px over
+    the label, no floor stack bars), so menu, counter (four digits too), hearth, floor control and undo / redo fit in
+    one row down to 371 px (R1 T1.8; it hid the counter up to 480 px before).
 * Tap (or key **T**) → **town card** (popover in the same style as the piece info card):
 
 ```
 🔥 Cozy 62 · Cheerful   [██████████░░░░░░]                               ✕
-Warmth 38 from granted wishes · Charm 24 from decor round homes
+Warmth 38 from neighbours and wishes · Charm 24 from decor round homes
 Different kinds of decor near a home count more than lots of one kind.
 Residents   [🌷 Mabel] [🪓 Bram] [🐝 Posy]   ⛺ 1 camping              (chips → villager card)
 💭 2 wishes open                                                      [Next ›]
@@ -1339,6 +1415,16 @@ Day 4 of the town · 7 wishes granted
 * `view().note` (the boot summary, §3.5) shows as a line under the residents until the card is closed once.
 * With villagers off it shows only *"🧺 Villagers are resting. Turn them on in Settings."*
 * At the cap: *"The meadow is full: 20 neighbours live here."*
+* "Could move in" rows name every runner-up the same way: the name the next traveller of that job would have (the
+  signature name, else the seeded pool name, or the saved traveller's), so a row never reads *"a gardener would
+  come"* beside *"Posy the Beekeeper would come"* (M2).
+* "Almost homes" lists every almost-eligible building and fix-up (a bedded building of any size included, R1 T1.1),
+  and also the small bedless sheds (≥ 4 cells, not muted) that never get a bubble: that line is their only hint (§14.1
+  item 2; `HomeView.listed`).
+* "Could move in" (R1 T1.7): while anyone camps (or waits with no building), a full Home's row names that camper,
+  since campers take free beds first (§4.2): *"The thatched cottage: one more bed and Posy could move in from the
+  camp"* (`ROW_TEXT.bedCamp`). A Home that already has `BEDS_PER_HOME_MAX` beds gets no "one more bed" row (another
+  bed would not raise its capacity).
 
 ### 10.4 Hint cards, checklist and the gift card
 
@@ -1366,7 +1452,7 @@ event per commit (§3.5), and the hud sends **one** toast for it.
 | granted | 💛 {Name}: "{line}" · Cozy +{gain} | success 3000 |
 | gift | 🎁 {Name} left you a {Gift}. Find it in 🌷 Garden **[Place it]** | success 6000 |
 | fixed up (only after the fix-up bubble showed) | 🔨 {Name}: "Thank you for fixing it up!" | success 2800 |
-| status commit, one villager | 📦 {Name} is moving into {the home} · ⛺ {Name} is camping by the lane until there's a bed free · 🏡 {Name} is back home | info 2800 |
+| status commit, one villager | 📦 {Name} is moving into {the home} · ⛺ {Name} is camping by the lane until there's a bed free · 🏡 {Name} is back home (only when the change carries `back`: a camper back in their own old bed, R1 T1.6) | info 2800 |
 | status commit, several | 📦 {n} neighbours moved into the new houses · ⛺ {n} villagers are camping by the lane until there are beds (both parts when both happened, one toast) | info 3200 |
 | camp thank-you | 💛 {Name}: "A real bed! Thank you!" · Cozy +{gain} | success 3000 |
 | Show me hint | {icon} Tap a glowing spot to {verb} a {Piece} for {Name} (verb: plant / place / build / lay) | info 3600 |
@@ -1385,7 +1471,7 @@ The boot restore sends no toast (§3.5); the welcome back toast is the only one 
 | `wish` | first wish bubble on screen | 💭 Tap a bubble to see what someone would love |
 | `flow` | 90 s after the first move-in, only if `timeFlow` is off | ⏳ Let the day pass to see {Name}'s whole day **[Let the day pass]** (sets `timeFlow: true`; 8000 ms) |
 | `almost` | first almost bubble | 🏠 Almost a home! Tap the grey bubble to see what's missing |
-| `vacancy` | first vacancy bubble | 🏡✨ A free bed! Tap the green bubble to see who could live here |
+| `vacancy` | first vacancy bubble, once it has stayed on screen 1 s (`almost` too; R1 T1.5) | 🏡✨ A free bed! Tap the green bubble to see who could live here |
 | `camp` | first camper | ⛺ Villagers without a bed camp by the lane. Add a bed and they'll move right in. |
 | `intro` | the intro card was answered (§1.3) | (no toast) |
 
@@ -1505,34 +1591,40 @@ is presentation only: bubbles, 💤, sfx range). `store.js` may touch `localStor
 
 /** @typedef Building (homes.detectBuildings)
  *  id · cells:Set<'x|y|z'> · lo · levels:number[] · foot:[x,z][] (lowest level, sorted z then x)
- *  doors: [{ key, step:[x,z], out:[dx,dz], y, main:boolean, doorway:boolean }]   exterior doors on `lo`
+ *  doors: [{ key, step:[x,z], out:[dx,dz], y, main:boolean, doorway:boolean, cell:[x,z] }]   exterior doors on `lo`
  *                                                                    (doorway: an open gap used as the way in, §3.1)
  *  windows: [{ key, t, x, z, out:[dx,dz] }]                          lowest-level windows (light spill)
- *  gaps:string[] (W keys) · unroofed:string[] ('x|y|z') · flaws:number
+ *  gaps:string[] (W keys) · gapEdges:[{ ek, d }] · unroofed:string[] ('x|y|z') · flaws:number · rooms:number
  *  beds:string[] (I keys, sorted) · capacity:number · home:boolean
- *  reasons: Array<'bed'|'door'|'gaps'|'roof'> · name:string · shell:boolean (uncovered candidate, §3.7)
- *  ground:number (how many of its cells are ground floors, §3.1 step 1) · roofedFrac:number (0..1, §3.7) */
+ *  reasons: Array<'bed'|'door'|'gaps'|'roof'> · name:string · shell:boolean (uncovered candidate, §3.7) · partOf? (shells)
+ *  roofHint: 'x|y|z'[] | null  ("the bedroom upstairs needs a roof": the cells to roof, §3.2 *)
+ *  ground:number (how many of its cells are ground floors, §3.1 step 1) · roofedFrac:number (0..1, §3.7)
+ *  detectBuildings(index) also returns roomOf, rooms, bOf (cell → building index, −1 none) and floor (M1). */
 
 /** @typedef Veranda (homes.detectBuildings): { y, cells:[x,z][], doors:string[] (W keys of doors onto it) } */
 
 /** @typedef Nav (nav.buildNav)
- *  N:22 · O:11 · cost:Float32Array(484) (Infinity = blocked) · surface:Float32Array(484)
+ *  N:22 · O:11 · cost:Float32Array(484) (Infinity = blocked) · surface:Float32Array(484) · blocked · doorstep · steps
  *  edge:Uint8Array(484*4)   per cell & dir (0 +Z, 1 +X, 2 −Z, 3 −X): 0 open (incl. gates), 1 hop, 2 wall
  *  region:Int16Array(484) (−1 blocked; flooded over open AND hop edges) · mainRegion:number · laneCell:[−11,−1]
- *  path(from:[x,z], to:[x,z]) → { pts:Float32Array (x,y,z…), len, hops:number[], slips:number[], ok:true }
- *  nearestFree(cx, cz, maxCells, sameRegion = true) → [cx,cz] | null
- *  isFree(cx, cz) · cellOf(x, z) → [cx,cz] · centre(cx, cz) → [x,y,z] · surfaceAt(x, z) → y */
+ *  path(from:[x,z], to:[x,z], seed?) → { pts:Float32Array (x,y,z…), len, hops:number[], slips:number[], cells:number[], ok:true }
+ *        (seed: the ±0.3 m lane offset of §6.2; cells: the A* cell indices, used to re-plan a walk whose route got built over)
+ *  nearestFree(cx, cz, maxCells, sameRegion = true) → [cx,cz] | null · inMain(cx, cz) · reachWithout(cells) (cut-off check)
+ *  isFree(cx, cz) · cellOf(x, z) → [cx,cz] · centre(cx, cz) → [x,y,z] · surfaceAt(x, z) → y · baseCost · stats
+ *  nav.js also exports asciiMap(nav, tents) (debug.nav()). */
 
 /** @typedef Spot (recipes.findHangouts / sim)
  *  id ('<slotKey>#<n>') · kind:'seat'|'stand'|'work'|'porch'|'plaza'|'door'|'tent'|'inside'
  *  piece · cell:[cx,cz] · at:[x,y,z] · face:yaw · pose:PoseId · approach:[cx,cz] · hangout:string|null · level */
 
 /** @typedef WorldModel (model.buildWorldModel)
- *  version · index · buildings:Building[] · homes:Building[] · shells:Building[] · verandas:Veranda[] · nav
- *  spots:Spot[] · hangouts:[{ id, spots:Spot[], lamps, fire, blooms }]
- *  lane:[x,y,z][] (LANE[2] → LANE[0] resampled every 1 m, y from heightAt, then the lane cell)
+ *  version · index · det · buildings:Building[] · homes:Building[] · shells:Building[] · verandas:Veranda[] · nav
+ *  spots:Spot[] · hangouts:[{ id, spots:Spot[], lamps, fire, blooms }] · tents:[cx,cz][] · ms (build time)
+ *  lane:[x,y,z][] (LANE[2] → LANE[0] resampled every 1 m, y from heightAt, then the lane cell; index.js passes env's
+ *        whole LANE polyline and the model uses LANE[0..2])
  *  passerby:{ route:[x,y,z][], view:[cx,cz] } (§4.7)
- *  validate(rec) → {ok, reason} · isFree(rec) → bool                 (injected: world.validate / world.get) */
+ *  validate(rec) → {ok, reason} · isFree(rec) → bool   (injected; index.js normalizes the raw spot-finder recs first:
+ *        validate: rec => world.validate(world.normalize(rec) || rec), isFree: the normalized rec's slot is empty) */
 
 /** @typedef VillagerModel (sim → actors / index; READ-ONLY outside sim.js)
  *  id · name · job · trait · voice · seed
@@ -1540,16 +1632,27 @@ is presentation only: bubbles, 💤, sfx range). `store.js` may touch `localStor
  *  status:'traveller'|'resident'|'waiting'|'camping'|'passerby' · leaving:boolean (a traveller turning back)
  *  homeId:string|null · bed:string|null · feet:string[] (≤ 3 packed footprints) · arrived:number · grants:number
  *  plan:Plan · planId:number (bumps on every new plan) · wish:Wish|null
- *  flags:{ pack, tool, basket, book, lantern } · mood:0..3 (Cozy tier) */
+ *  flags:{ pack, tool, basket, book, lantern } (set explicitly by the sim; a missing flags object shows the tool) · mood:0..3 (Cozy tier)
+ *  Fields starting with `_` are the sim's private bookkeeping (index.js reads _loc 'in'|'out'|'lane'|'gone', _cell,
+ *  _pos, _inHome, _target and _act for views and debug only). Passers-by have ids 'p1'…, travellers their future 'v' id. */
 
-/** @typedef Plan — times are town-clock seconds; actors interpolate at the render clock
+/** Lying (M2): every lying pose ('sleep' inside, 'lie' outdoors) puts the head toward `face`; actors.js had it toward −face.
+ *  @typedef Plan — times are town-clock seconds; actors interpolate at the render clock (town clock + the part of a
+ *  tick not yet run). Plans chain in time: a step's t0 is the previous plan's t1.
  *  { kind:'walk',   pts:Float32Array, len, t0, t1, hops:number[], slips:number[], hurry:boolean }
- *  { kind:'pose',   at:[x,y,z], face, pose:PoseId, t0, t1 (Infinity = until replaced), level:0 }
+ *  { kind:'pose',   at:[x,y,z], face, pose:PoseId, t0, t1 (Infinity = until replaced), level:0, ground?:[x,y,z], piece? }
+ *                   `at` is the feet for standing poses and the seat top for seated ones; a pose whose `at` is
+ *                   ≥ 0.28 m above its floor is drawn seated (read / chat / warm on a bench or log sit); `ground` is the
+ *                   standing point when `at` is a seat
  *  { kind:'inside', homeId, level, at:[x,y,z], face, pose:'sleep'|'sit'|'stand', t0, t1 }
- *  { kind:'door',   at:[x,y,z], face, dir:'in'|'out', t0, t1 }          0.4 s dither through a door
+ *                   'sleep' lies in the bed at its local (0, 0.62, −0.1), `face` = the direction the head points (the
+ *                   bed's local −Z), blanket on, hat off
+ *  { kind:'door',   at:[x,y,z], face, dir:'in'|'out', t0, t1 }          0.4 s dither through a door, always along
+ *                   `face`: 'in' from at to at + 0.4 m fading out, 'out' from at − 0.4 m to at fading in
  *  { kind:'hop',    from:[x,y,z], to:[x,y,z], t0, t1 }                  unstick hop (0.35 s arc)
  *  { kind:'slip',   from:[x,y,z], to:[x,y,z], t0, t1 }                  fade out → puff → fade in (0.5 s)
- *  { kind:'gone' }                                                       not drawn */
+ *  { kind:'gone' }                                                       not drawn
+ *  Plans may carry private fields (_cues, _cells, _to, _seat) that actors ignore. */
 
 /** PoseId: 'stand','sit','kneel','water','hoe','scatter','pat','fork','chop','knock','fish','catch','smoke','knead',
  *  'polish','post','sort','read','chat','wave','admire','cheer','stretch','sweep','lie','rock','lookup','warm' */
@@ -1557,16 +1660,25 @@ is presentation only: bubbles, 💤, sfx range). `store.js` may touch `localStor
 /** @typedef Cue (sim → actors / index): { t, kind, id?, at?:[x,y,z], n?, home? }
  *  kind: 'hearts'|'note'|'sparkle'|'drops'|'chips'|'seeds'|'puff'|'z'|'letter'|'bread'|'fish'|'bees'|'hop'|'wave'
  *        |'pulse' (move-in glow: spill + openings at max(night, 0.7) for 2.5 s; `home`)
- *        | foley kinds 'chop'|'splash'|'cluck'|'hum'.  'puff' with n = 8 at the chimney is the move-in puff ring */
+ *        | foley kinds 'chop'|'splash'|'cluck'|'hum'.  'puff' with n = 8 at the chimney is the move-in puff ring.
+ *  'hop' / 'wave' need `id`; FX cues spawn at `at`, else at the villager's head or hand. index.js plays `hop` (within
+ *  25 m of the camera target) and, for the traveller's knock, `move-in` on 'hop' cues, and queues foley for audible(). */
 
 /** @typedef Wish: { tpl, born, size, dream:boolean, base:number|null, friend:string|null, homeId,
  *  frozen:object|null (e.g. { route:[cx,cz][] }), piece, icon, text, label }
  *  (piece = the first part's piece; icon/text/label resolved from the template, {friend} filled in) */
 
-/** @typedef SpotPlan (wishes.findSpots / hintSpots, §7.5)
- *  { parts:[{ piece, n, have }], recs:[{ part, rec, x, y, z, r, cell:[cx,cz], edge?:{ a, x, z, y } }], complete:boolean } */
+/** @typedef SpotPlan (wishes.findSpots / hintSpots / termSpots, §7.5)
+ *  { parts:[{ piece, n, have }], recs:[{ part, rec, x, y, z, r, cell:[cx,cz], level, edge?:{ a, x, z, y } }], complete,
+ *    spots0 (candidate count of the first part, for the §7.4 lot fit) }
+ *  x, y, z are world metres (y = the spot's surface), `level` the piece level, `rec` the full record to place (roof
+ *  recs from hintSpots carry h: null, index.js fills it with builder.autoRoofHeight). */
 
-/** @typedef SimEvent: { type, ...detail }; types and details as the bus events in §12.5 without the 'town-' prefix */
+/** @typedef SimEvent: { type, ...detail }; types and details as the bus events in §12.5 without the 'town-' prefix,
+ *  but carrying villager ids (villager: 'v1'); index.js turns them into VillagerViews for the bus. Extra sim events:
+ *  camp { tents } (the tents changed: index.js recomputes with tents: sim.tents(), since they block nav), passerby { id },
+ *  work { villager, job, produces } (the Phase 2 hook of §16, never put on the bus). `fixed` adds `gain`; status
+ *  changes add `from` (the previous home id). */
 ```
 
 ### 12.4 Module APIs (signatures each WP implements exactly)
@@ -1613,15 +1725,21 @@ export function footOverlap(a, b) → number          // |a ∩ b| / min(|a|, |b
 export function nameOf(building, index) → string    // §3.4, without the article
 ```
 
-**nav.js** (WP1): `export function buildNav(index, buildings, { tents = [] } = {}) → Nav`.
+**nav.js** (WP1): `export function buildNav(index, det /* detectBuildings' result */, { tents = [] } = {}) → Nav`;
+`export function asciiMap(nav, tents) → string` (debug.nav()).
 
 **recipes.js** (WP1)
 
 ```js
-export function evalRecipes(index, home, town /* { homes:number } */) → { fit:{[job]:number}, met:JobId[], missing:{[job]: [{ what, have, need }]} }
-export function chooseJob(evals, jobCounts, first /* roster empty */) → { job, runnersUp: JobId[] }
-export function charmOf(index, home) → number       // 0..20 (§9.1)
-export function findHangouts(index, nav, buildings) → { spots: Spot[], hangouts: Hangout[] }
+export function evalRecipes(index, home, town /* { homes:number, inside:Set (every building cell) } */)
+  → { fit:{[job]:number}, met:JobId[], found, missing:{[job]: [{ what, have, need, text, piece, where, R, term }]} }
+     // items inside any building never count as outdoor
+export function chooseJob(evals, jobCounts, first /* roster empty */) → { job, runnersUp: JobId[] }   // first friend: fewest unmet terms (§4.3)
+export function closestJobs(evals, units?) → JobId[]                  // the vacancy card's "closest jobs"
+export function charmOf(index, home, inside?) → number                // kinds_h, an unbounded count (§9.1)
+export const charmFromKinds = (S) => CHARM_MAX × (1 − e^(−S / CHARM_SCALE))    // the town charm
+export function insideSet(buildings) → Set<'x|y|z'> · localToWorld(x, z, r, lx, lz) · doorStandPoint(door, nav) · unitsIn(set, t)
+export function findHangouts(index, nav, det) → { spots: Spot[], hangouts: Hangout[] }
 ```
 
 **wishes.js** (WP1)
@@ -1634,6 +1752,11 @@ export function isDone(tpl, ctx, wish) → boolean
 export function baseline(tpl, ctx) → number | null
 export function findSpots(tpl, ctx, wish = null) → SpotPlan          // §7.5; ≤ 24 recs
 export function hintSpots(kind /* 'bed'|'door'|'gaps'|'roof' */, building, world) → SpotPlan   // one part; roof recs carry h: null (index.js fills it)
+// M1 extras: TEMPLATE (by id) · createWish(tpl, ctx, clock, { dream }) · weightOf(tpl, ctx, { odd, sameHeld, lotSpots })
+//   textOf(id, ctx, friendId) → { icon, text, label } · termSpots(term, building, world, town) (Show me { home, job })
+//   freeArea(ctx) · areaLayout(area) · routeOf(ctx). w_neighbour, the camp fallback and the Postie's "another home"
+//   plan a full SMALL_HOME layout (17 recs in 5 parts: foundation ×4, wall ×7, wall_door, roof_flat ×4, bed) on a
+//   frozen free 6 × 6 area, so placing the plan really grants the wish.
 ```
 
 **model.js** (WP1)
@@ -1658,12 +1781,25 @@ export function createSim({ save /* sanitized TownSave */, readOnly = false }) �
 //   tick(dt = TICK, ctx: { sky, flowing, guided, night })   no camera data, ever
 //   reseat()                               placeFor() everyone now (slider jump, villagers back on, load)
 //   planFor(target: { villager } | { home, hint } | { home, job } | { camp }) → { plan:SpotPlan, inside, level, text }
-//   couldMoveIn() → [{ homeId, homeName, kind:'bed'|'free', job, name?, missing:[…] }]
+//   couldMoveIn() → [{ homeId, homeName, kind:'bed'|'free', job, name?, camper?, missing:[…] }]   (camper: the id of
+//                   the camper a "one more bed" would bring, named instead of a newcomer, R1 T1.7)
 //   muteHint(homeId) · answerIntro(lovely:boolean) · note:string|null (boot summary for the town card)
 //   drainEvents() → SimEvent[] · drainCues() → Cue[]
 //   serialize() → TownSave
 //   debug: { spawn(job, opts), traveller(job), passerby(), wish(id, tpl), grant(id), expire(id), setCozy(n),
-//            unlock(id), unlockAll(), advance(seconds, ctx), stuck() → id[], outdoorsShare() → 0..1 }
+//            unlock(id), unlockAll(), advance(seconds, ctx), stuck() → id[], outdoorsShare() → 0..1,
+//            resetOutdoors(), stats() → { tickMs, ticks, slips, plans }, resetStats(), phaseOf(id), inner(id) }
+// M1 extras (read-only views index.js uses): homeViews() → per building { id, name, theName ("the thatched cottage",
+//   or "Mabel's thatched cottage" when two share a name), home, shell, status 'home'|'full'|'vacancy'|'almost'|'fix',
+//   bubble 'almost'|'fix'|'vacancy'|null, missing:[{ kind, icon, text, n }], roofAnchor:[x,y,z], door, doorCell, beds,
+//   capacity, residents, free, light (spill level 1 / SPILL_ASLEEP / 0), asleep, lit, windows, doors, lo, foot (packed),
+//   fit, best, runnersUp, almost, cells, reasons } · tents() → [cx,cz][] · campWish() → { n, icon, text, label } | null ·
+//   line(id) (the flavour line, §2.6; a granted line wins over the move-in line) · fadedWish(id) · a settable `intro`
+//   (true while the intro card is open: no traveller is scheduled) · a settable `holdPasserby` (M2: true while a card
+//   covers the meadow; the first passer-by comes PASSERBY_FIRST after it clears, §4.7) · homeViews() rows also carry
+//   `listed` (on the town card's "Almost homes": almost-eligible, or a small bedless shed, not muted; M2) · live save fields unlocks, seen, tips, muted, stats ·
+//   day, population, seed, lastSeen, readOnly · lastError (the sim catches its own exceptions there; index.js turns the
+//   first one into a town failure, §13.5).
 ```
 
 **store.js** (WP1)
@@ -1675,39 +1811,64 @@ export function sanitizeTown(obj) → TownSave        // never throws; §12.9 ru
 export function loadTown() → { save: TownSave, readOnly: boolean, fresh: boolean }
 export function saveTown(save, onFail /* () => void, called once */) → boolean
 export function saveUnlock(id) → boolean            // adds id to KEYS.unlocks first (tiny key), before the town save
+// store.js imports only data.js (template ids and sizes are checked against data.js WISH_TEXT / WISH_SIZE);
+// sanitizeTown always outputs v: 1, loadTown judges readOnly from the raw v; a non-JSON save salvages unlocks / seen.
 ```
 
 **actors.js** (WP2), the only WP2 API index.js uses
 
 ```js
-export function createActors(app) → Actors
+export function createActors(app, { render = true } = {}) → Actors   // render:false (townrender=0): the group is never
+                                                                     // added to the scene; hitTest / highlightHit find nothing
 // Actors:
 //   sync(models: VillagerModel[])          add/remove/re-skin instances by id; cheap when nothing changed
-//   update(dt, clock, frame: { night, viewLevel, seeAll, photo, camTarget:[x,y,z] })
+//   update(dt, clock, frame: { night, viewLevel, seeAll, photo, camTarget:[x,y,z], scrub? })
+//                                          clock = the render clock; scrub: true fades everyone out while the time
+//                                          slider moves (§5.4), they fade back in where their next plans put them
 //   cue(c: Cue)                            FX, hop arcs, waves, move-in glow
-//   positionOf(id) → { x, y, z, headY, visible } | null
+//   positionOf(id) → { x, y, z, headY, visible } | null   headY = the top of the job hat (bare head 1.25 m, toque and
+//                                          stovepipe ≈ 1.57 m), so "head + 0.35 m" bubbles clear tall hats
 //   hitTest(sx, sy, padPx = 24) → { id, dist } | null   CSS px of the canvas; the projected body (a capsule from
 //                                          feet to head, radius 0.3 m) grown by padPx; index.js passes 12 with the
 //                                          Build tool and 24 otherwise
 //   setSpill(lights: [{ kind:'ground'|'opening', x, y, z, nx, nz, w, h, homeId }], levelOf: (homeId) => 0..1)
-//   setCamp(tents: [{ x, z }])
+//                                          (x, y, z) = the quad centre. index.js: a ground quad 0.75 m out from the
+//                                          door / window edge midpoint, y = nav surface + 0.03, 1.6 × 1.2; an opening
+//                                          quad 0.11 m outside the wall line at the opening's middle (door 1.0 × 1.95,
+//                                          window 1.0 × 1.0); levelOf from the residents inside (1 / 0.15 / 0)
+//   setCamp(tents: [{ x, z }])             world-metre tent centres, door toward +X, y = 0
 //   highlight(h: { cells:[{x,y,z}], faint?:[{x,y,z}], edges?:[{x,z,y,a}], ghost?:Rec } | null)
-//   highlightHit(sx, sy) → number          index into h.cells / h.edges whose ring (radius 0.9 m at the spot's
-//                                          surface) or the ghost's world box the screen ray passes through, else −1
+//                                          cells in world metres (y = the spot surface, as SpotPlan recs carry); edges
+//                                          = SpotPlan rec.edge (grid edge, y = level); faint rings at 35 %, not hittable
+//   highlightHit(sx, sy) → number          index into [...h.cells, ...h.edges] (cells first) whose ring (radius 0.9 m
+//                                          at the spot's surface) or the ghost's world box the screen ray passes
+//                                          through (a ghost hit → the ring nearest the ghost's slot; only a finite,
+//                                          non-empty box counts, R2 T2.1), else −1
 //   compile(camera) → Promise              one hidden instance of every town mesh, renderer.compileAsync (§12.8)
-//   debugNav(nav | null) · setVisible(b) · stats() → { calls, tris, instances, updateMs }
+//   debugNav(nav | WorldModel | null) · setVisible(b) · stats() → { calls, tris, instances, updateMs }
+//                                          (a WorldModel also draws home outlines, shells, doorsteps and spots)
+//   not in the contract, for tests: group, render, frame, actor(id)
 ```
 
 **gifts.js** (WP2): registers the 10 defs of §8.2 with `registerPiece`, taking ids, names, `gift: { job }`, `walk` and
 seat anchors from `data.js GIFTS`; extra def field `hidden: true`, except for ids found in `KEYS.unlocks` or in
-`KEYS.town`.unlocks (read in try/catch at registration, §8.3), which register with `hidden: false`.
+`KEYS.town`.unlocks (read in try/catch at registration, §8.3), which register with `hidden: false`. Also on the defs:
+`seats` (a copy of the GIFTS seats), `counts`; the rowboat `thumb: { r: 1 }`; hen house and rowboat `mats:
+['paintedWood'], paint: true`; the gnome `paintAlways` (hat); the bread oven `emitterOffset` [0, 1.3, −0.2] and a
+per-surface `root.userData.emitterOffset`. Exports `unlockedGifts()`. main.js loads it with the other piece modules
+(M1), so gift pieces always register, villagers on or off.
 
 **hud.js** (WP3)
 
 ```js
 export function createHud(app, { root, topLeft, toast, ask }) → Hud
-// Hud: update(dt) · openTown() · openVillager(id) · nextWish() · close() · isOpen() → boolean
-// Reads app.town (TownAPI) and listens to the bus events of §12.5. Never imports other town modules.
+// Hud: update(dt) · openTown() · openVillager(id) · nextWish() · close() · isOpen() → boolean · destroy() · debug
+// Reads app.town (TownAPI) afresh on every call and listens to the bus events of §12.5. Never imports other town modules.
+// It mounts after first paint (ui.js), i.e. after `ready`: it runs its ready logic at mount and polls view().intro.
+// Bubbles are ranked by kind (traveller > gift > wish > camp > fix > almost > vacancy > dream, edge-clamped travellers
+// count toward the 6), not by BubbleView.priority. Bubbles hide under the sheet, a dialog and the first-visit welcome
+// card. UI timers (the gift card's delay, the flow tip) run on real time. Tapping a traveller's bubble follows them and
+// shows an info toast instead of a card.
 ```
 
 **index.js** (WP4): `export async function init(app) → TownAPI`, published by main.js as `app.town`:
@@ -1733,63 +1894,83 @@ follow(id | null) · focusHome(homeId)
 update(dt)
 debug: { … §12.13 }
 
-// TownView      { day, cozy, villagers:VillagerView[], homes:HomeView[], couldMoveIn:Row[], almost:HomeView[],
-//                 campers:number, openWishes:number, granted:number, full:boolean, timeFlow:boolean,
-//                 enabled:boolean, note:string|null, intro:boolean (show the intro card, §1.3) }
+// TownView      { day, cozy, villagers:VillagerView[] (residents, waiting, campers; not the traveller), homes:HomeView[]
+//                 (every building and shell, with its status), couldMoveIn:Row[], almost:HomeView[] (almost-eligible
+//                 buildings and fix-ups), campers:number, openWishes:number, granted:number, full:boolean,
+//                 timeFlow:boolean, enabled:boolean, note:string|null, intro:boolean (show the intro card, §1.3; stays
+//                 true until answerIntro, since the hud mounts after `ready`), away:number|null (s since the last
+//                 visit, measured at boot: the welcome-back toast) }
 // VillagerView  { id, name, job, jobLabel, jobIcon, color, trait, traitLabel, traitIcon, status, statusText,
 //                 homeId, homeName, wish:{ tpl, text, label, icon, piece, pieceName, size, dream } | null,
-//                 fadedWish:boolean, line, grants }
-// HomeView      { id, name, door:[x,y,z], beds, capacity, residents:id[], free, status:'home'|'almost'|'fix'|'vacancy'|'full',
-//                 missing:[{ kind, text, icon, n }] }
+//                 fadedWish:boolean, line, grants, voice (0.85–1.25, the card's babble pitch) }
+//                 villager(id) also answers for the traveller (status 'traveller')
+// HomeView      { id, name ("the thatched cottage", the article included), door:[x,y,z], beds, capacity,
+//                 residents:id[], free, status:'home'|'almost'|'fix'|'vacancy'|'full', missing:[{ kind, text, icon, n }],
+//                 plus sim.homeViews()'s extras (roofAnchor, bubble, theName, …) }
 // BubbleView    { key, kind:'wish'|'dream'|'traveller'|'passerby'|'camp'|'almost'|'fix'|'vacancy'|'sleep'|'nameplate'|'gift',
-//                 icon, text?, label, at:[x,y,z], villager?, home?, tappable, priority, arrow:boolean (edge-clamp
-//                 with an arrow when off-screen: traveller and passer-by), dim:boolean (guided) }
-// Row           { homeId, homeName, text, icon, target:{ home, job } }
+//                 icon, text?, label, at:[x,y,z], roof?:[x,y,z], villager?, home?, tappable, priority, arrow:boolean
+//                 (edge-clamp with an arrow when off-screen: traveller and passer-by), dim:boolean (guided) }
+//                 `at` is the head + 0.35 m outdoors and the home's roof anchor while the villager is inside or hidden
+//                 (and for dreams); `roof` (wishes outdoors) lets the hud switch to the roof anchor when a piece
+//                 occludes the head. `text` carries the camp count (camp) and the pill text (nameplate, "Mabel 🌷").
+//                 `label` may be the bare template label: the hud builds "Mabel's wish: …" / "Mabel dreams: …".
+//                 kind 'gift' (M2): a 🎁 at the granter's head (else their roof) for 4 s after a thank-you gift; a tap
+//                 opens the gift card.
+// Row           { homeId, homeName, text, icon, target:{ home, job } | { home, hint:'bed' } (a 'bed' row: "one more
+//                 bed and Posy the Beekeeper would come"), job }; the row texts are data.js ROW_TEXT
 ```
 
 ### 12.5 Events on the bus (`state.js` `events`)
 
 | Event | Detail | Emitted by | Heard by |
 |---|---|---|---|
-| `town-ready` | `{}` (after the restore recompute) | index | hud |
+| `town-ready` | `{ away }` (after the restore recompute; `away` = s since the last visit or null) | index | hud |
 | `town-homes` | `{ homes: HomeView[] }` (after a recompute that changed homes) | index | hud |
 | `town-traveller` | `{ villager: VillagerView, homeId, first, migration }` | index | hud (toast + pin) |
 | `town-movein` | `{ villager, homeId, homeName, first }` | index | hud (toast, nameplate, hearth) |
 | `town-wish` | `{ villager, wish }` | index | hud |
-| `town-granted` | `{ villager, wish, reward: { cozy, gift: giftId or null }, gain, cozy: { before, after }, camp: boolean }` (camp: the camp thank-you, §3.6) | index | hud |
+| `town-granted` | `{ villager, wish, reward: { cozy, gift: giftId or null }, gain, cozy: { before, after }, camp: boolean }` (camp: the camp thank-you, §3.6; the toast's line is `villager.line`, a granted line) | index | hud |
 | `town-expired` | `{ villager, wish }` | index | hud |
 | `town-gift` | `{ id, name, from: villagerId, fromName }` | index | ui (cards), hud (gift card) |
 | `town-cozy` | `{ value, tier, prevTier }` | index | hud |
-| `town-status` | `{ changes: [{ villager, status, prev, homeName? }] }`: one event per settled commit (§3.5); never at the boot restore | index | hud (one summary toast) |
-| `town-fixed` | `{ villager, homeId }` | index | hud |
+| `town-status` | `{ changes: [{ villager, status, prev, homeName?, from, back }] }`: one event per settled commit (§3.5); never at the boot restore. `back` (R1 T1.6): a camper returning to the bed they left (`_lastBed`, kept in the save as `home.bed`) in a home matching their most recent foot, so "back home" never names a home they never lived in | index | hud (one summary toast) |
+| `town-fixed` | `{ villager, homeId, gain }` | index | hud |
+| `town-passerby` | `{ id }` (a passer-by set off; the tip fires when its arrow / route first shows) | index | hud |
+| `town-readonly` | `{}` (another tab wrote the town: this tab never writes it again, §12.9) | index | hud (warn toast + Reload) |
+| `town-savefail` | `{}` (the first failed town write) | index | hud (warn toast, once) |
 | `town-day` | `{ day }` | index | (Phase 2/3 hook) |
-| `town-showme` | `{ villager?, home?, piece, pieceName, icon, verb, inside, parts:[{ piece, icon, name, n, have }], update:boolean }` | index | hud (hint toast on the first; checklist chip) |
+| `town-showme` | `{ villager?, home?, camp?, piece, pieceName, icon, verb (data.js SHOWME_VERB, else 'place'), inside, parts:[{ piece, icon, name, n, have }], update:boolean }` | index | hud (hint toast on the first; checklist chip) |
 | `town-showme-end` | `{ granted:boolean }` | index | hud (removes the checklist) |
 | `town-intro` | `{}` (an existing build met a fresh town, §1.3) | index | hud (intro card) |
 | `town-select` | `{ id }` (a villager was tapped in the world) | index | hud (opens the card) |
 | `town-enabled` | `{ on }` | index | hud, ui |
 
-SFX from index.js: `wish` (bubble on screen), `wish-granted`, `move-in`, `gift`, `hop` (within 25 m). hud.js emits
-`villager` with `opts.pitch` on card open. Every town event is also logged with `townlog=1`.
+SFX from index.js: `wish` (when the new bubble's anchor projects into the canvas), `wish-granted`, `move-in` (on the
+traveller's knock, the 0 s beat of §4.6), `gift`, `hop` (within 25 m of the camera target); `opts` may carry `pan` and
+`gain`. hud.js emits `villager` with `opts.pitch` on card open. Every `town-*` event's `villager` is a VillagerView (the
+hud also accepts an id). Every town event is also logged with `townlog=1`. index.js also emits `toast` once for the §0.4
+flow-default switch (its text is data.js `STATUS_TEXT.flowDefault`).
 
 ### 12.6 Exact edits to existing files
 
 | File | WP | Change |
 |---|---|---|
-| `js/main.js` | 4 | (1) `app` gains `town: null`. (2) piece loop `['floors', 'walls', 'roof', 'decor', 'gifts']`, so gift pieces always register, villagers on or off. (3) after blueprints: `setLoading('Waking the village…', 0.8); app.town = await loadModule('town', './town/index.js');` (before ui). (4) in `frame()`, after the blueprints line: `try { app.town?.update?.(dt); } catch (e) { reportError('town.update', e); app.town.update = null; }` (index.js's `update` does nothing until its restore recompute on `ready`, §3.8). (5) autosave hook: `let savedView = restored && !(saved.dropped > 0) ? JSON.stringify(rig.getView()) : null;`, so a restore that dropped unknown pieces (gifts met by an older cached version) is never overwritten by a camera-only flush; edits still save. Nothing else. |
+| `js/main.js` | 4 | (1) `app` gains `town: null`. (2) piece loop `['floors', 'walls', 'roof', 'decor', 'gifts']`, so gift pieces always register, villagers on or off. (3) after blueprints: `setLoading('Waking the village…', 0.8); app.town = await loadModule('town', './town/index.js');` (before ui). (4) in `frame()`, after the blueprints line: `try { app.town?.update?.(dt); } catch (e) { reportError('town.update', e); app.town.update = null; }` (index.js's `update` does nothing until its restore recompute on `ready`, §3.8). (5) autosave hook: `let savedView = restored && !(dropped > 0) ? JSON.stringify(rig.getView()) : null;`, so a restore that dropped unknown pieces (gifts met by an older cached version) is never overwritten by a camera-only flush; edits still save. `dropped = (saved.dropped || 0) + (saved.pieces.length − app.loadBuild(saved))`, computed where the autosave is restored: `storage.sanitize` keeps records of unknown ids and only `world.load` skips them, so `saved.dropped` alone never counts them (M0). Nothing else. |
 | `js/state.js` | 4 | `defaults` gains `village: true` and `chatter: true`; both go in `PERSIST` (booleans are already validated by `cleanSetting`). |
-| `js/env.js` | 4 | `const LANE` → `export const LANE`; `const DAY_SECONDS` → `export const DAY_SECONDS`. Nothing else (index.js reads them through `app.modules.env`, falling back to `LANE_FALLBACK` / 600). |
+| `js/env.js` | 4 | `const LANE` → `export const LANE`; `const DAY_SECONDS` → `export const DAY_SECONDS` (index.js reads them through `app.modules.env`, falling back to `LANE_FALLBACK` / 600). M2 (feel check): the lingering dusk of §5.1 (`sunTime(t)`, used for the sun and moon only), and a smoke emitter's alpha × `def.smokeAlpha` (default 1). |
+| `js/pieces/decor.js` | 4 (M2) | `fire_pit`: `emitterOffset` [0, 1.0, 0] (was 0.35) and `smokeAlpha: 0.45`, a thin wisp that starts above head height so whoever sits round the fire stays in view. |
+| `js/blueprints.js` | 4 (M2) | With villagers on and drawn (`app.town?.enabled()` and the `'town'` group in the scene, so not with `townrender=0`), a stamp ("Place it instantly") is followed, once the cascade is done, by the finishing glide (any touch of the camera cancels it), which then frames the garden too (trees aside), pulling back at most ×1.15 (`finishView(bp, cap)`), so the bench and the hive where the routine plays out are in the portrait shot. Villagers off: unchanged. |
 | `js/catalog.js` | 4 | add `export function setHidden(id, hidden) { const d = registry.get(id); if (d) d.hidden = !!hidden; return !!d; }`, and document `gift` / `walk` in the `registerPiece` comment. |
-| `sw.js` | 4 | add `./css/town.css`, `./js/pieces/gifts.js` and all 14 `./js/town/*.js` (§12.1) to `CORE`; `VERSION` 4 → 5. |
+| `sw.js` | 4 | add `./css/town.css`, `./js/pieces/gifts.js` and all 14 `./js/town/*.js` (§12.1) to `CORE`; `VERSION` 4 → 5. (Done in M1, as soon as main.js loaded gifts.js and the town at boot, so offline play never misses a module.) |
 | `tools/batch-regress.mjs` | 4 | (1) M0: `startServer`, `launch`, `openGame`, `saveDataURL` and the injected helper strings move, unchanged, to the new `tools/harness.mjs` (§13.1); batch-regress imports them and still re-exports `ROOT` / `openGame` for old callers. Its module body (the suite, `process.exit`) stays here, so importing harness.mjs never runs it. (2) Every query it opens gets `&town=0` appended, or `&town=fresh&townrender=0` with `HW_TOWN=1` (the town's logic, rig wrapping and recomputes run but nothing is drawn, so the draw-call ratio checks are unchanged). Nothing else. |
 | `docs/ARCHITECTURE.md` | 4 | file list; a "Town (`js/town/`, `app.town`)" section (contract of §12.3–12.5, the scene group rule, the storage key, params); the state keys `village` and `chatter`; the new sfx names; the toast `action` option; `catalog.setHidden`; the gift def fields; a pointer to `docs/LIVING.md`; `tools/harness.mjs` in the file and tools lists; under *Dev tools*, that `?showcase=all` lays out 10 pieces per row and with more than 100 pieces its last row sits just past the lot's front edge. |
 | `README.md` | 4 | a *Villagers* chapter (homes, wishes, Cozy, gifts, quiet meadow), a Settings row, keys T/J, URL params, piece count "96 + 10 thank-you gifts", the tools list. |
 | `index.html` | 3 | `<link rel="stylesheet" href="css/town.css">` after `ui.css`. |
-| `js/ui.js` | 3 | (1) `toast(text, kind, ms, action)`: with `action: { label, fn }` renders a `.hw-toast-act` button and adds class `has-act`; the `toast` event passes `d.action`. (2) Settings: a "Village" section (two `toggle()` rows, note, "(off for this page)"); `syncSettings` keys add `village`, `chatter`. (3) `pageMain`: a "🔥 Town" row (Cozy number) whenever `app.town?.enabled()`, at every screen width, opening `hud.openTown()`. (4) Help: Villagers section; keys T and J. (5) keydown: `t` → `hud?.openTown()`, `j` → `hud?.nextWish()`; Esc closes an open hud card first. (6) Cards: re-render on `town-gift`; a `.hw-card-gift` ribbon when `def.gift && app.town?.giftInfo(def.id)?.isNew`; a Garden tab dot until the tab is opened after an unlock; `showInfo` adds "A thank-you from {from}". (7) Welcome card: one line *"Build a home with a bed and someone may move in."*, only while `app.town?.enabled()`. (8) Mount: after first paint, `import('./town/hud.js')` (try/catch, `console.error` on failure) → `hud = createHud(app, { root, topLeft, toast, ask })`, only if `app.town`; `update()` calls `hud?.update(dt)`. |
-| `js/audio.js` | 3 | (1) `SFX` + `GAP` entries of §11.1. (2) `events.on('sfx', d => play(d.name, d.flavor, d.opts))`; `play` merges `extra` into `o` (already supported). (3) `computeEnv`: `const a = app.town?.audible?.()`; `E.talkers = state.chatter && a ? a.talkers : []`; foley queue. (4) `Ambience.schedule`: a chatter voice and foley (§11.2). (5) `stats().amb.chatter` counter for tests. |
+| `js/ui.js` | 3 | (1) `toast(text, kind, ms, action)`: with `action: { label, fn }` renders a `.hw-toast-act` button and adds class `has-act`; the `toast` event passes `d.action`. (2) Settings: a "Village" section (two `toggle()` rows, note, "(off for this page)"); `syncSettings` keys add `village`, `chatter`. (3) `pageMain`: a "🔥 Town" row (Cozy number) whenever `app.town?.enabled()`, at every screen width, opening `hud.openTown()`. (4) Help: Villagers section; keys T and J. (5) keydown: `t` → `hud?.openTown()`, `j` → `hud?.nextWish()`; Esc closes an open hud card first. (6) Cards: re-render on `town-gift`; a `.hw-card-gift` ribbon when `def.gift && app.town?.giftInfo(def.id)?.isNew`; a Garden tab dot until the tab is opened after an unlock; `showInfo` adds "A thank-you from {from}". (7) Welcome card: one line *"Build a home with a bed and someone may move in."*, only while `app.town?.enabled()`. (8) Mount: after first paint, `import('./town/hud.js')` (try/catch, `console.error` on failure) → `hud = createHud(app, { root, topLeft, toast, ask })`, only if `app.town`; `update()` calls `hud?.update(dt)`; the returned ui API gains a read-only `hud` getter (WP3 named its variable `townHud`: ui.js already had a `hud`). |
+| `js/audio.js` | 3 | (1) `SFX` + `GAP` entries of §11.1. (2) `events.on('sfx', d => play(d.name, d.flavor, d.opts))`; `play` merges `extra` into `o` (already supported); `opts` also takes `gain` (0..2) and `pan` (−1..1). (3) `computeEnv`: `const a = app.town?.audible?.()`; `E.talkers = state.chatter && a ? a.talkers : []`; foley queue (≤ 3); an `evening` flag. (4) `Ambience.schedule`: a chatter voice and foley (§11.2). (5) `stats().amb.chatter` and `.foley` counters for tests. (Also fixed: a pre-existing click in the `place` leaf flavour, burst spacing 0.026 → 0.031 s.) |
 
-**Not edited:** `world.js`, `batcher.js`, `builder.js`, `blueprints.js`, `storage.js`, `effects.js`, `camera.js`,
-`thumbs.js`, `materials.js`, `geom.js`, `config.js`, `js/pieces/{floors,walls,roof,decor}.js`, `tools/shot.mjs`,
+**Not edited:** `world.js`, `batcher.js`, `builder.js`, `storage.js`, `effects.js`, `camera.js`,
+`thumbs.js`, `materials.js`, `geom.js`, `config.js`, `js/pieces/{floors,walls,roof}.js`, `tools/shot.mjs`,
 `css/style.css`, `css/ui.css`, `manifest.webmanifest`. If a WP believes one of these needs a change, it raises it with
 the spec owner (§13.5) instead of editing.
 
@@ -1833,7 +2014,13 @@ the spec owner (§13.5) instead of editing.
   `null`. Indoor villagers are tappable only when visible. With the Build tool the pad is 12 px and a Show me spot
   always wins, so building at a door where a villager stands places the piece; Erase, Paint and Pick keep 24 px.
 * **Follow** (§10.2): each frame, if `goal.target` is more than 0.05 m from where follow put it last frame, follow ends
-  and the target is clamped to `rig.bounds`; else `rig.focus(x, y + 0.8, z)`. Orbit and zoom keep it.
+  and the target is clamped to `rig.bounds`; else `rig.focus(x, y + 0.8, z)`. Orbit and zoom keep it. camera.js anchors
+  a pinch and a twist on the point between the fingers and re-anchors a one-finger orbit on what is under the view
+  centre, which moves `goal.target`; so `wrapRig()` also gives the rig **instance** thin wrappers, active only while
+  following (camera.js itself stays unedited, R1 T1.4): `_zoomAbout` / `_turnAbout` get no pivot in `multi` mode (the
+  zoom changes the radius only, the twist turns about the target), `_reanchor` does nothing, and `_grab` (the
+  two-finger slide) holds back until the midpoint has slid `24 px + ½ Σ|Δ finger distance|` since `_initMulti`, then
+  applies the whole drift at once, which ends Follow as a pan does. A wheel zoom toward the cursor still ends it.
 * **Show me** (§7.6): a `pieceId` / `tool` change that index.js didn't make itself ends the highlight; index.js records
   the piece it hands over before calling `selectPiece`.
 * **Guided** (§4.1) is computed every tick from `active()` and `progress()`.
@@ -1848,10 +2035,12 @@ the spec owner (§13.5) instead of editing.
   headroom), `visible = count > 0`.
   * They share one `MeshStandardMaterial({ vertexColors: true, roughness: 0.85 })` patched with `onBeforeCompile`
     (`customProgramCacheKey` `'town-villager-1'`).
-  * Per-vertex attribute: `aPart` (float, the `PART` enum: 0 fixed, 1 outfit, 2 skin, 3 hair, 4/5 legs, 6/7 arms, 8
-    head, 9 tool, 10 pack, 11 hat, 12 basket, 13 book).
+  * Per-vertex attribute: `aPart` (float) packs part + 16 × tint + 128 × round(shade × 32), so one tint carries trims
+    and checks. Part enum (WP2, internal): 0 fixed, 1 blanket, 2 bun, 3 beard, 4/5 legs, 6/7 arms, 8 head, 9 tool, 10
+    pack, 11 hat, 12 basket, 13 book, 14 walking stick.
   * Per-instance attributes: `iOutfit`, `iSkin`, `iHair` (vec3); `iAnim` (vec4: leg swing, left arm, right arm, head
-    yaw); `iAnim2` (vec4: sit 0..1, tool raise, bob, unused); `iFlags` (vec4: fade 0..1, tool, pack, extra bitmask).
+    yaw); `iAnim2` (vec4: sit 0..1, tool raise, bob, head pitch); `iFlags` (vec4: fade 0..1, tool, pack, extra bitmask:
+    1 basket, 2 book, 4 hat off, 8 lie, 16 beard, 32 bun).
   * The vertex shader recolours tagged parts, rotates legs and arms about the hip (y 0.42) and shoulder (y 0.82)
     pivots (normals too), turns the head about the neck (y 0.92), bends the legs 80° forward when sitting, and
     collapses hidden accessories to their pivot.
@@ -1874,8 +2063,11 @@ the spec owner (§13.5) instead of editing.
 * **Camp**: one `InstancedMesh` (10) of vertex-coloured canvas tents, only while someone camps.
 * **Highlight**: one `InstancedMesh` (24) of pulsing golden flat rings (`AdditiveBlending`; the later parts' rings at
   35 % brightness), plus the ghost:
-  `world.buildPlaced(rec)` with every mesh's material set to `materials.blueprintMat(true)`, added to the town group,
-  removed (**never disposed**: it shares template geometry) when cleared.
+  `world.buildPlaced(rec)` baked into **one** mesh (R2 T2.4: every visible part's geometry, position and normal only,
+  in the piece's own frame, merged with `mergeGeometries`) drawn with `materials.blueprintMat(true)` at the piece's
+  placement and added to the town group; on replace only that baked geometry is disposed (the template geometry stays
+  shared). A piece with nothing drawable or a non-finite placement shows no ghost and no ghost hit box (the rings alone
+  mark the spot), so a broken ghost can never claim the whole screen (R2 T2.1).
 * **Debug overlay** (`townnav=1`): one 44 × 44 m plane with a canvas texture (22 × 22 cells × 10 px).
 * **No first-use stutter**: `actors.compile(camera)` runs during `init`, behind the loading screen: one hidden
   instance of every town mesh (a body of every job, glow, blob, spill, FX points, tent, ring), then
@@ -1895,11 +2087,13 @@ the spec owner (§13.5) instead of editing.
   | FX | 1 |
   | camp | 0–1 |
   | **total, worst** | **≤ 13** |
-  | highlight | + 1 ring + ghost (≤ 5) |
+  | highlight | + 1 ring + 1 ghost (one baked mesh whatever the piece; the birdhouse has 10 parts) |
 
   Main pass only; nothing in the shadow pass. Measured in the drafts: +11 calls for 20 villagers + blob + spill + FX
   (cottage 94 → 105, farmhouse 126 → 137).
-* **Triangles**: ≤ 900 per villager (≤ 18k for 20); ≤ 300 per tent.
+* **Triangles**: ≤ 900 per villager (≤ 18k for 20); ≤ 300 per tent (148 now); a lantern 24 (a square one, R1 T1.13:
+  up to 30 burn at night, 20 villagers and 10 tents). With 20 villagers the town stays ≤ 20k triangles day and night,
+  campers included (R11's night case).
 
 ### 12.9 Persistence
 
@@ -1936,7 +2130,8 @@ the spec owner (§13.5) instead of editing.
 * **`sanitizeTown`** (never throws; the same style as `storage.sanitize`):
   * known fields only; finite numbers, clamped;
   * ≤ 20 villagers, unique ids `^v\d{1,4}$`, names ≤ 24 characters;
-  * `job` / `trait` / `tpl` / gift ids from the known sets;
+  * `job` / `trait` / `tpl` / gift ids from the known sets, as **own** keys of those tables (`Object.hasOwn`-style), so
+    `toString`, `constructor` or `__proto__` are never "known" (R1 T1.12);
   * `bed` matches `^I\|-?\d{1,2}\|[0-4]\|-?\d{1,2}$`; ≤ 3 feet, each ≤ 400 cells in −11..10; `muted` ≤ 30 feet;
     `campGrants` ≤ 60 strings `^v\d{1,4}\|I\|…$`; `frozen.route` ≤ 64 cells;
   * `recent` ≤ 5, `cool` ≤ 10 entries.
@@ -1994,35 +2189,51 @@ the spec owner (§13.5) instead of editing.
 | Item | Budget (desktop headless; ×3–5 on a mid-range phone) |
 |---|---|
 | Extra draw calls, 20 villagers of 8 jobs + campers, no highlight | ≤ 14 (target ~11) |
-| … with a Show me highlight | ≤ 20 |
-| Extra triangles, 20 villagers | ≤ 20k |
+| … with a Show me highlight | ≤ 20 (the highlight adds exactly 2: the rings and the one-mesh ghost, R2 T2.4) |
+| Extra triangles, 20 villagers | ≤ 20k (no highlight) |
+| … with a Show me highlight | ≤ 20k + the ghost piece's own triangles, i.e. ≤ 22.6k: the ghost is one copy of the piece the player is about to place (the largest wish piece is the apple tree, 2,570) |
 | `actors.update` + bubbles, per frame (EMA) | ≤ 0.3 ms |
 | `sim.tick` (4 Hz), 20 villagers | ≤ 0.1 ms average |
 | Recompute (`buildWorldModel` + re-binding + wish checks) | ≤ 1.5 ms on a blueprint lot, ≤ 4 ms on a 1,000-piece lot; at most 2 Hz. Typed arrays over the 22 × 22 grid (the string-keyed prototype of this rule took 1.0–1.65 ms for detect + nav on the farmhouse) |
 | A* plans | ≤ 0.1 ms each, ≤ 4 per frame |
 | Bubbles | ≤ 10 `transform` writes per frame, ≤ 6 shown, skipped when the camera and anchors haven't moved; occlusion rays ≤ 2 per frame at 4 Hz per bubble |
-| First traveller / first villager drawn | 0 new shader programs (compiled behind the loading screen, §12.8); worst frame ≤ 50 ms headless while it appears |
+| First traveller / first villager drawn | 0 new shader programs (compiled behind the loading screen, §12.8); worst frame ≤ 50 ms headless while it appears. Headless SwiftShader frames take 90–200 ms whatever the town does, so R3 checks the frame's main-thread work (render submit + town + hud) ≤ 50 ms and reports the raw frame times (M1: ≈ 20 ms in the traveller's first frame: town 3.6, hud 7.8, render submit 8.2) |
 | Shadow pass | 0 extra calls; the town never sets `shadowMap.needsUpdate` |
 | Geometry memory | < 1 MB |
 | Save size | ≤ 8 KB |
 | Phone (owner's mid-range device) | `app.fps` median ≥ 45 on the `PERF_TOWN` lot (§13.4 R11) with 20 villagers, ≥ the same scene with `town=0` minus 5 fps; no visible hitch when the first traveller appears (profiled once, noted in the playtest build's notes) |
 
+*Measured (M3), headless Chromium + SwiftShader on an iPhone 13 viewport (390 × 664, UI on), on a loaded 4-core
+machine (fps there is the rasteriser's ≈ 10, meaningless):*
+
+| Scene | Town draw calls | Town triangles | Per-frame main-thread work (median / p95) | Town EMAs |
+|---|---|---|---|---|
+| Farmhouse, `spawn=20` (1 resident, 19 campers at the lane camp) | 12 (137 vs 125 with the group hidden); 14 with a Show me highlight, any of the 18 wishes feasible there (R2: 21–23 for 7 of them before the ghost was baked into one mesh) | 19,574 (19,054 since R1; 19,452–21,080 with a highlight) | whole frame 3.8 / 9.8 ms (`town=0`: 3.3 / 7.5); render submit 3.1 / 8.0 (`town=0`: 3.1 / 7.4); town update 0.3 / 0.9; hud 0.1 / 0.5 | update 0.24 ms, actors 0.12 ms; recompute median 1.2 ms (0.9–4.2) |
+| `PERF_TOWN`, 20 residents | 10 (44 in total) | 17,334 | — | update 0.33 ms, actors 0.13 ms |
+| R1 (square lanterns): farmhouse `spawn=20` at 0.42 / 0.75 / 0.9 (10 tents; 20 lanterns at dusk and night) | 12 / 12 / 12 | 19,054 / 19,534 / 19,708 (21,268 at night before) | — | — |
+| R1: `PERF_TOWN` cleared, 20 campers, 0.9 (R11's night case) | 13 | 19,654 | — | — |
+
+`sim.tick` with 20 villagers: 0.10–0.11 ms per tick in a tight `advance` loop and 0.17–0.30 ms per tick measured
+live between frames (Chromium's coarsened `performance.now`, cold caches, the loaded machine), i.e. ≤ 0.08 ms per
+frame at 60 fps for the 4 Hz tick; B9's own measure (desktop, 20 residents) is 0.049 ms. The owner's phone row above
+is still to be profiled on the device.
+
 ### 12.12 Dev URL parameters (validated like main.js's; malformed values are ignored)
 
 | Param | Effect |
 |---|---|
-| `town=0` | Villagers off for this load (the setting is not changed). The module loads; `enabled()` is false; nothing drawn, ticked or saved. |
-| `town=1` | On for this load even if the setting is off. |
-| `town=fresh` | On for this load, with a fresh in-memory town (the saved one is untouched and never written). |
+| `town=0` | Villagers off for this load (the setting is not changed). The module loads; `enabled()` is false; nothing drawn, ticked or saved. index.js then imports no other town module, leaves the rig unwrapped and runs no recompute (`ready` stays false); the same holds for a showcase. `unlock` still applies. |
+| `town=1` | On for this load even if the setting is off. The player's own **Villagers & wishes** switch still wins during the session: the first `village` change drops the override (M2, R16). |
+| `town=fresh` | On for this load, with a fresh in-memory town (the saved one is untouched and never written); the switch wins the same way. |
 | `townrender=0` | The town runs (sim, recomputes, rig wrapping, events) but draws nothing and hit-tests nothing (§12.8); `batch-regress` uses it with `HW_TOWN=1`. |
-| `townseed=n` | Seed for a fresh town (integer 0..4294967295). |
+| `townseed=n` | Seed for a fresh town (integer 0..4294967295): with `town=fresh`, or when the profile has no town key yet. |
 | `townspeed=n` | Town clock × n (number 1..120). With `timeFlow` on, the sky flows ×n too (index.js advances `state.time` itself). |
-| `spawn=gardener,baker` / `spawn=n` | After the first recompute, move these jobs (or n villagers, cycling `JOB_ORDER`) straight into free beds, else camp; no walk. |
-| `wish=<tpl>` | The first villager gets this wish (console.warn with the reason if impossible). |
+| `spawn=gardener,baker` / `spawn=n` | After the first recompute, move these jobs (or n villagers, cycling `JOB_ORDER`) straight into free beds, else camp; no walk (then one more recompute, since camp tents block nav). |
+| `wish=<tpl>` | The first villager gets this wish (console.warn with the reason if impossible): at once after `spawn`, else at the first move-in. |
 | `cozy=n` | Set Warmth so Cozy ≈ n (0..100). |
 | `unlock=all` / `unlock=id,id` | Unlock gifts for this load (not saved); applied even when the town is off for the load (`town=0`, showcases). |
 | `townnav=1` | Overlay: nav costs (green → red), hop/wall edges, home outlines (green Home, amber almost + reason), doorsteps, spots. |
-| `townhud=1` | Dev HUD (top-left text): villagers, open wishes, Cozy (warmth + charm), clock, phase, % of town time with ≥ 1 villager outdoors, slips, recompute ms, tick ms, actor ms, town draw calls. |
+| `townhud=1` | Dev HUD (top-left text): villagers (+ traveller / passer-by), open wishes, the hearth number (Cozy, tier, warmth + charm, floor), clock, day, speed, sky time and phase, % of town time with ≥ 1 villager outdoors, slips, recompute ms (model ms), tick ms, actor ms, update ms, town draw calls and triangles, homes, and each villager's status / activity. |
 | `townlog=1` | `console.log` every town event. |
 
 Example: `node tools/shot.mjs --mobile --query "bp=cottage&nosave=1&town=fresh&spawn=gardener,baker&time=0.74&townnav=1" --out /tmp/evening.png`
@@ -2030,9 +2241,12 @@ Example: `node tools/shot.mjs --mobile --query "bp=cottage&nosave=1&town=fresh&s
 ### 12.13 In-page debug API (`window.__hw.town.debug`; `who` = id or name)
 
 ```
-state()                     → JSON snapshot: roster, homes, wishes, cozy, clock, unlocks
-homes()                     → [{ id, name, cells, beds, capacity, residents, home, reasons, flaws, doorsteps, fit }]
-recipes()                   → per home { met, fit, missing, best }
+state()                     → JSON snapshot: roster (id, name, job, trait, status, homeId, bed, feet, grants, cell, loc,
+                              plan, pose, act, wish), traveller, passerby, homes, wishes, cozy, clock, day, unlocks,
+                              stats, tents, note, readOnly, params (deterministic: R12 compares it between two pages)
+homes()                     → [{ id, name, cells, ground, levels, rooms, beds, capacity, residents, home, reasons, flaws,
+                              doors, doorway, gaps, unroofed (counts), doorsteps ([x,z] pairs), fit, best }]
+recipes()                   → per home { id, name, met, fit, missing, best, runnersUp }
 spawn(job?, { name, trait, travel })  → id      (travel: walk in from the lane)
 traveller(job?) · passerby()
 wish(who, tpl)              → { ok, reason, plan }
@@ -2040,20 +2254,40 @@ plan(who)                   → the open wish's current SpotPlan (re-targets lik
 grant(who, { build: true }) → places the plan's recs in order with world.add(…, { record: true }), recomputing after
                               each (the real path), until done → { granted, placed }
 edit(fn)                    → runs fn(world) at the next tick boundary, then recomputes and calls setWorld
-                              synchronously (no debounce, no frame timing); returns the new world.version
+                              synchronously (no debounce, no frame timing); returns a Promise of the new world.version
+                              (it runs at once while the town isn't ticking: hidden, off, before `ready`)
 expire(who) · cozy(n) · speed(k) · unlock(id) · unlockAll()
-advance(seconds)            → deterministic ticks with the current context, then re-seat actors
-step(n)                     → n ticks of 0.25 s
+advance(seconds)            → deterministic ticks with the current context → the town clock. While time flows the sky
+                              moves with the town clock during the advance (TICK / DAY_SECONDS per tick) and
+                              state.time is set at the end (not a slider jump); the actors catch up by themselves
+step(n)                     → n ticks of 0.25 s (the same way)
 phase('morning'|'day'|'evening'|'home'|'night')  → sets state.time to mid-phase
 nav()                       → ASCII map (# blocked, ~ hop edge, | wall edge, . free, D doorstep, T tent, L lane cell)
 path([x,z], [x,z])          → { len, hops, slips }
 stuck()                     → [] (the invariant of §6.3)
 outdoors()                  → share of town time since load with ≥ 1 villager outdoors (0..1)
 select(who)                 → emits town-select and follows
-stats()                     → { calls, tris, instances, updateMs, tickMs, recomputeMs, plansPerSec, slips, maxFrameMs }
+stats()                     → { calls, tris, instances, updateMs, tickMs, recomputeMs, plansPerSec, slips, maxFrameMs,
+                              recomputes, ticks, modelMs, setWorldMs, afterMs, actorMs }; maxFrameMs is the longest
+                              frame since the previous stats() call (each call starts a new window), so a test reads it
+                              once before and once after. updateMs = the EMA of the whole town update (ticks + actors),
+                              actorMs = actors.update's own EMA, tickMs = the sim's mean tick. calls / tris count only
+                              what is really drawn: 0 / 0 while the town group is hidden (villagers off) or not in the
+                              scene (`townrender=0`) (R1 T1.14)
 snapshot()                  → the sanitized save object
 reset({ keepUnlocks: true })
+parts()                     → { name: { ok, missing:[exports], error } } for the brain / body modules index.js imports
+                              (data, store, model, nav, recipes, wishes, sim, actors; M1: all imported at boot, and a
+                              missing or incomplete one turns the town off for the session with one console.error)
+loadParts(names?)           → imports modules not loaded yet (since M1 everything is wired at boot; kept for tests)
+following()                 → the id the camera follows, or null (M1, for R17)
+sim · actors · model        → getters for tests and the dev HUD (M1; not a contract)
+crash(where = 'update')     → test hook: throws inside the town at its next update ('api': at once in a guarded call),
+                              so tests can check that a failure turns the town off for the session and building goes on
 ```
+
+index.js also exports two pure helpers for Node tests: `parseParams(URLSearchParams)` (§12.12, malformed values
+ignored) and `phaseAt(skyTime)` (the steady schedule's phase, §5.2).
 
 ---
 
@@ -2070,8 +2304,9 @@ reset({ keepUnlocks: true })
 
 Tests: `tools/town-brain.js`, `tools/town-look.js` and `tools/town-hud.js` are `shot.mjs --script` bodies (they run in
 the page and `return` a report). `tools/town-regress.mjs` is a Node runner on **`tools/harness.mjs`** (`import {
-startServer, launch, openGame, saveDataURL, helpers } from './harness.mjs'`), the side-effect-free module M0 carves out
-of batch-regress.mjs (§12.6): importing it starts nothing and never exits. All exit or report non-zero on failure. None
+startServer, launch, openGame, saveDataURL, helpers } from './harness.mjs'`; it also exports `ROOT`, the second helper
+script `helpers2` and `injectHelpers(page)`, which adds both), the side-effect-free module M0 carves out of
+batch-regress.mjs (§12.6): importing it starts nothing and never exits. All exit or report non-zero on failure. None
 of them are in `CORE`.
 
 ### 13.2 Shared interfaces each WP codes against (and how it stubs the others)
@@ -2099,9 +2334,36 @@ of them are in `CORE`.
    and the hearth number in `townhud`. Arrivals, routines (with the granted-piece use), the passer-by, the lane, the
    camp. Run R1–R3, R6, R7, R11, R12, R17. **Feel check with the owner here** before filling in the other seven jobs
    and the rest of the catalogue: if watching Mabel isn't fun, fix that first.
+   *M1 status:* index.js drives the real sim and actors with everything WP1 built enabled (all 8 jobs and all 43
+   templates, gifts, hints, the camp); Show me and tap snapping work for `w_door_flowers`, `w_door_bench` and
+   `w_shade_tree` (and any plan the sim returns). R1–R3, R6, R7, R11, R12 and R17 pass in `tools/town-regress.mjs`,
+   with batch-regress in both modes.
 4. **M2 (WP4 with WP3)**: the hud on the real API. All jobs, all templates and plans, gifts. Run R4, R5, R8–R10, R15,
    R16, R18–R21.
+   *M2 status:* the hud runs on the real TownAPI; R4, R5, R8–R10, R15, R16, R18–R21 are in `tools/town-regress.mjs`
+   and pass with everything from M1; the owner-feel-check fixes (night strolls, sleepers' heads, the first chore and
+   first wish, fire-circle seats, the nameplate and hearth tip, fire-pit smoke, bubbles at the edges, the stamp's
+   framing, the lingering dusk, the passer-by and the welcome card, the indoor glow, the ghost's bob, hud strings, 💤
+   beside a shared anchor, walkers off flower beds) are in, plus the §9.2 Cozy effects (gait, skip, waves, humming),
+   the 🎁 gift bubble and the shed's town-card line. A `feel` section checks sleepers' heads.
 5. **M3**: docs, `sw.js`, the full `town-regress` + `batch-regress` (both modes), phone profiling, playtest build.
+   *M3 status:* `sw.js` `CORE` holds all 47 files the game loads (the 14 town modules, `gifts.js` and `town.css`
+   included), `VERSION` 5. Offline under a `/hearthwood/` subpath (a GitHub-Pages-like server, Playwright offline): the
+   v5 worker stores the whole set; with the network down, a reload boots from it with 0 requests reaching the server,
+   a cottage stamp brings a traveller who moves in and is drawn, `spawn=4` on the farmhouse draws 4 villagers, gifts
+   register; a returning player on the v4 worker updates to v5 (the v4 cache deleted) and boots offline with
+   villagers. README (a *Villagers* chapter: homes, jobs, days, wishes and Show me, Cozy, gifts, almost-homes, watching,
+   never lost, the quiet meadow, the intro card, the day passing by default; Settings; keys; the tools; the URL params)
+   and ARCHITECTURE.md (a *Town* section: the module table, boot and per-frame wiring, the TownAPI, input, the drawing
+   rules, persistence, state keys, gift pieces, the core hooks, events, params, tests) describe the feature. These
+   pass: the full `town-regress` (146 checks; R13 run separately), B1–B12, L1–L11 (desktop and phone), H1–H15 (phone,
+   landscape, desktop), and `batch-regress` 48/48 with `town=0` and with `HW_TOWN=1`. 71 dev-URL loads on desktop,
+   phone and landscape (every blueprint, showcase and core param, every town param, malformed values) show no console
+   errors; the one console message is §12.12's intended warning for `wish=w_door_bench` on the cottage, whose door
+   already has a bench. §14.1 item 2 was checked per blueprint (each with a bed gets a move-in; the shed shows no
+   almost bubble over 200 s and is listed on the town card), and item 3 end to end with real touch (fresh profile, no
+   dev params: welcome card → Follow a blueprint → Place it instantly → move-in 34.5 s later → first wish 35 s after
+   that → granted with 3 taps, portrait and landscape). Phone-viewport profile: §12.11 *measured (M3)*.
 
 ### 13.4 Per-package acceptance (scriptable; the expected values are this spec's)
 
@@ -2123,7 +2385,7 @@ build them with `world.add(…, { record: false })` after `world.clear`):
 
 | # | Check |
 |---|---|
-| B1 | Stamp each blueprint and build every §3.2 variant and review fixture; `detectBuildings` matches both §3.2 tables exactly (cells, ground cells, levels, rooms, beds, doors incl. `doorway`, gaps, unroofed, home, reasons, doorsteps) and the veranda counts (Log Cabin 4 cells, Farmhouse 5, V1–V4b 2, V5 two of 2, G7 one of 2). |
+| B1 | Stamp each blueprint and build every §3.2 variant and review fixture; `detectBuildings` matches both §3.2 tables exactly (cells, ground cells, levels, rooms, beds, doors incl. `doorway`, gaps, unroofed, home, reasons, doorsteps) and the veranda counts (Log Cabin 4 cells, Farmhouse 5, V1–V4b 2, V5 two of 2, G7 one of 2), G10–G12 included (R1). |
 | B2 | `evalRecipes` per blueprint home: Cottage `gardener 2.0, beekeeper 1.0, baker 1.0`; Farmhouse `gardener 1.33, farmer 1.5`; Log Cabin and A-Frame `woodcutter 1.0`. `chooseJob` with an empty roster → cottage `gardener`, farmhouse `farmer`, log cabin and A-frame `woodcutter`. Semis (no recipe) → first-friend `gardener`. |
 | B3 | Nav on every blueprint lot, N1–N5 and V3: every doorstep in `mainRegion`; no free cell outside `mainRegion`; `path(laneCell, DOOR1)` has `ok` and 0 slips. Blueprint lots: 0 hops and 18 ≤ len ≤ 45 m (the cottage's hedge and the farmhouse's fence send it round to the gate). N1 and N2: exactly 1 hop; N3, N4, N5: 0 hops; V3: 1 hop (the half wall). Each of N1–N5 gives `w_door_bench` a complete plan whose first rec keeps every doorstep in `mainRegion`. A cottage with one roof panel removed leaves no free pocket cell. |
 | B4 | Every template in §7.3: on a fixture lot where it is offered, `isDone` is false and `findSpots` returns a complete plan; placing the plan's recs in order with `world.add` and recomputing after each makes `isDone` true, and after each placement `have` counts up by one part item (the checklist). Fixtures:<br>• the cottage;<br>• cottage + a `pond` at (5, 4), for the water and fisher templates;<br>• cottage + `SMALL_HOME(6, −8)`, for `w_path_friend` and `J_post_paths`;<br>• a `SMALL_HOME` with nothing around it and a gardener spawned, for the odd-job wishes. |
@@ -2131,16 +2393,16 @@ build them with `world.add(…, { record: false })` after `world.clear`):
 | B6 | Never stuck: a villager walled in on 4 edges, a pond dropped on a villager, and a fence ring around a villager all give `stuck()` = `[]` after `setWorld` + 1 tick; the pond case uses a `hop` plan to a cell ≤ 2 away; the fence-ring villager and villagers living in N1 / N2 get **no** hop or slip plan (their cells are in `mainRegion`). |
 | B7 | Store: 2,000 random mutations of a valid save (including `feet`, `muted`, `campGrants`, `frozen`) never make `sanitizeTown` throw and always yield a valid save; serialize → sanitize → `createSim` → serialize is identical; a `v: 2` save loads with `readOnly: true`. |
 | B8 | Re-binding and settling: (a) cottage resident → `world.clear` → no change before 3 s of quiet, then one `status` event with the camper → undo → `resident` with the same bed key; (b) roof removed and put back within 2 s → 0 events; (c) roof removed 20 s → `waiting`, put back → resident, no `fixed` event, Warmth unchanged; (d) roof removed 70 s (bubble shown) → put back → resident + `fixed` + `COZY_FIX`; (e) an open wish is dropped on commit (no `expired` event, no cooldown) and the next wish comes 60 s after the commit; (f) load the farmhouse (`world.load`, record) → resident in the farmhouse bed, then load the cottage again → back in the cottage bed (feet); (g) two villagers and one bed: the later arrival camps; a new bed → one camp thank-you (+12, once), and moving the bed back and forth gives no second one for the same bed key; (h) a traveller whose target vanishes turns back, is not in `villagers`, and never camps. |
-| B9 | Timing (desktop headless): `buildWorldModel` farmhouse average ≤ 1.5 ms over 20 runs; a 1,000-piece lot ≤ 4 ms; `tick` with 20 villagers ≤ 0.1 ms average. |
+| B9 | Timing (desktop headless): `buildWorldModel` farmhouse average ≤ 1.5 ms over 20 runs; a 1,000-piece lot ≤ 4 ms; `tick` with 20 villagers ≤ 0.1 ms average. On a shared, loaded machine one batch can take twice the next (R1 T1.15), so the budgets are checked against the fastest of seven 20-run batches (farmhouse; five for the big lot and the recompute), with the median and a same-page calibration loop (`calibMs`) reported beside it; the owner's phone profiling keeps the absolute numbers. |
 | B10 | Purity: `node -e "import('./js/town/sim.js').then(m => console.log(typeof m.createSim))"` prints `function` (no three, DOM or window at import). |
 | B11 | Restore: a sim with 2 homes serialized and re-created on the same world → `setWorld(model, { restore: true })` gives 0 events and identical bindings; with one home erased → its residents are `camping` at once, 0 events, and `note` mentions them. |
-| B12 | Cozy: the §9.1 worked examples come out exactly (Cozy 32 at the cottage's move-in, 50 after S, M, M grants; the floor of 17 for a bare home), and a 600 s `advance` with warmth 60 and no grants loses 13–16 points. |
+| B12 | Cozy: the §9.1 worked examples come out exactly (Cozy 34 at the cottage's move-in, 50 after S, M, M grants; the floor of 17 for a bare home), and a 600 s `advance` with warmth 60 and no grants loses 13–16 points. |
 
 **WP2, `tools/town-look.js`** (`--query "bp=cottage&nosave=1&ui=0&town=0"`; also run with `--mobile`)
 
 | # | Check |
 |---|---|
-| L1 | `createActors(app)` + 20 hand-made models (all 8 jobs; 6 walking loops, 4 seated on bench / picnic seats, 1 lying in the cottage bed, 2 chopping, 2 fishing, 2 watering, 3 waving): render-call delta ≤ 13, triangle delta ≤ 20k, `stats().updateMs` EMA ≤ 0.3 ms, 0 console errors. |
+| L1 | `createActors(app)` + 20 hand-made models (all 8 jobs; 6 walking loops, 4 seated on bench / picnic seats, 1 lying in the cottage bed, 2 chopping, 2 fishing, 2 watering, 3 waving): render-call delta ≤ 13, triangle delta ≤ 20k, `stats().updateMs` EMA ≤ 0.3 ms or a tight `update` loop ≤ 0.3 ms, 0 console errors. As B9 (R2 T2.5): the tight loop runs as nine 100-update batches with a short pause between them and is checked against the fastest, with the median and a same-page calibration loop (`calibMs`) reported beside it (on a loaded machine one batch can take several times the next). |
 | L2 | `hitTest` at each visible villager's projected chest → that id with pad 12 and 24; 20 px outside the body → `null` with pad 12, the id with pad 24; 60 px away → `null`. |
 | L3 | A villager `inside` on level 1: hidden with `state.level = 0, seeAll = false`, shown with `seeAll = true`. |
 | L4 | Batching untouched: `world.batcher.stats()` and `world.root.children.length` unchanged; no town object on layers 1/2; `effects.tweens.length` unchanged; `renderer.shadowMap.needsUpdate` never set by the town. |
@@ -2159,7 +2421,7 @@ build them with `world.add(…, { record: false })` after `world.clear`):
 | H1 | 8 fake bubbles → ≤ 6 tappable shown, each within 2 px of its projected anchor; an anchor behind the camera is hidden; photo mode hides all; `enabled() = false` → none; `dim: true` → 40 % opacity. |
 | H2 | DOM click on a wish bubble → villager card with name, job, trait, wish text and line, and no pronoun (*her / his / their*) in any town string; **Show me** → `fake.showMe({ villager })` called once and the card closes; Esc closes the card; a `town-select` event opens it. |
 | H3 | Hearth: fake `cozy().frac` 0.2 vs 0.9 → the chip's `--cozy` matches; an open wish shows the ember dot and no number; a `town-granted` event makes it flare; tap → town card with resident chips, could-move-in rows and almost rows; **Turn on** sets `state.timeFlow = true`. |
-| H4 | Layout at 280 × 560 and at 320 × 568, 360 × 740, 375 × 667, 390 × 844, 414 × 896, portrait and landscape: portrait card bottom ≤ tray top + 1 px; landscape card on the left, not overlapping the rail; the top bar (menu, counter, hearth, floor control, undo / redo) has no overlapping or wrapped controls from 320 px up; the hearth hides only at ≤ 300 px; Menu has the 🔥 Town row at every width; all buttons ≥ 44 px. |
+| H4 | Layout at 280 × 560 and at 320 × 568, 360 × 740, 375 × 667, 390 × 844, 414 × 896, portrait and landscape: portrait card bottom ≤ tray top + 1 px; landscape card on the left, not overlapping the rail; the top bar (menu, counter, hearth, floor control, undo / redo) has no overlapping or wrapped controls from 320 px up; the hearth hides only at ≤ 300 px; the piece counter shows beside the hearth above 370 px and hides only at ≤ 370 (H4h, R1 T1.8); Menu has the 🔥 Town row at every width; all buttons ≥ 44 px. |
 | H5 | Settings: the Village section has two switches; toggling sets `state.village` / `state.chatter`; after `state.save()` both are in `hearthwood.settings.v1`. |
 | H6 | A toast with `action`: `elementFromPoint` at the button returns it, a click runs `fn`; a toast without action keeps `pointer-events: none`. |
 | H7 | Keys: T opens the town card, J calls `fake.showMe` for the next wish, Esc closes. |
@@ -2178,25 +2440,27 @@ build them with `world.add(…, { record: false })` after `world.clear`):
 |---|---|
 | R1 | Boot (`clean=1&nosave=1`): no errors, and `__hw.town.ready` becomes true after `ready` although no `world-change` happened; nothing town-drawn before it; with `town=0` the `'town'` group is invisible and there are no `.hw-bubble` elements. |
 | R2 | Each blueprint: `debug.homes()` matches §3.2; `debug.recipes()` best job matches B2. |
-| R3 | `town=fresh&bp=cottage`: traveller visible ≤ 6 s; `town-movein` ≤ 45 s; event order traveller → movein; move-in toast text; hearth chip visible; `stats().maxFrameMs` ≤ 50 while the traveller appears and `renderer.info.programs.length` unchanged from before the traveller. |
+| R3 | `town=fresh&bp=cottage`: traveller visible ≤ 6 s; `town-movein` ≤ 45 s; event order traveller → movein; move-in toast text; hearth chip visible; `stats().maxFrameMs` ≤ 50 while the traveller appears and `renderer.info.programs.length` unchanged from before the traveller. (Headless, the frame budget is checked on each frame's main-thread work, render submit + town + hud, since SwiftShader's own frames take 90–200 ms; §12.11.) (M2: the section runs in its own browser: SwiftShader's GPU process, shared by every section, carried state from the earlier ones and the traveller's first render submit took 45–70 ms after them vs ≈ 20–30 ms fresh.) |
 | R4 | First wish ≤ 40 s after move-in. DOM-click the bubble → card → Show me → `state.pieceId` is the wish's first part piece, the highlight is in the scene, and exactly one `toast` event fired (the town's hint, none from the builder). `builder`-free taps: `rig.onTap` at the projected ring centre (ground) → `town-granted` ≤ 1 s with the rec exactly at the spot, Warmth + gain; a second wish (`debug.wish`) granted by tapping the projected top of its ghost. `builder.undo()` → still granted, Warmth unchanged. Variants: (a) the cottage rotated so its door faces away from the camera → after Show me the view direction is within 1.2 rad of the door's outward direction; (b) starting on Floor 3 (`level 2`) with an outdoor wish → `state.level` 0 and no `toast` from the builder; (c) `w_soft_rug` → `state.level` = the spot's level, `seeAll` false, `rig.goal.phi` ≤ 0.9; (d) `w_supper_table` → after the table is placed the piece in hand becomes `chair` and the rings move, and after two chairs the wish is granted. |
 | R5 | Two granted wishes (`debug.grant(…, { build: true })`) → exactly one `town-gift`; the gift is in `catalog.piecesIn('garden')`. Reload (same profile, no `nosave`) → still unlocked. Villagers off → still in the tray. With Playwright routing `**/js/town/index.js` to a 500 (the town fails to import) → still in the tray, no errors outside the module report. |
 | R6 | Never evict: remove the roof → `waiting` (after 3 s); after 60 s → a fix-up bubble; undo → resident + `town-fixed`. Remove a roof and put it back within 2 s → 0 `town-status` events. `newBuild()` with 3 residents → exactly 1 camping toast, camp mesh visible; undo → resident with the same bed. Load the farmhouse via `loadBuild(data, { record: true })` → moving day into it (1 toast); undo → back. |
 | R7 | Never stuck: wall-box a villager's cell / drop a pond on them / fence them in → `debug.stuck()` empty within 2 s each. Villagers living in N1 and N2 for 10 town minutes (`advance`) → `stuck()` empty and `stats().slips` 0. |
 | R8 | Guided: `startGuided('cottage')`, add every guide piece → no traveller while unfinished; at done === total → traveller ≤ 4 s + 0.5 s. **Without pressing Close**, keep running 3 minutes (`townspeed=10`): a move-in happens, a new wish appears, and every bubble has `dim: false`. Erase one guide piece → paused again. |
 | R9 | Photo mode: villagers drawn; bubbles hidden; a canvas tap does nothing. |
-| R10 | Persistence: reload → same ids, names, wishes, clock ± 1 s; 60 s with `visibilityState` forced to hidden → clock unchanged; `nosave=1` → the key is byte-identical after a session. Reload a lot with 2 homes → 0 `town-status` events, 0 town toasts, identical bindings. |
-| R11 | Budget: `PERF_TOWN` with `spawn=20` (all 8 jobs) → render calls (town on) − (town hidden) ≤ 14; triangles ≤ 20k; town update EMA ≤ 0.6 ms; recompute ≤ 2 ms. |
-| R12 | Determinism: two pages `town=fresh&townseed=7&townspeed=60` with the same scripted edits applied through `debug.edit(fn)` → identical `debug.state()` after `advance(3600)`. |
+| R10 | Persistence: reload → same ids, names, wishes, clock ± 1 s; 60 s (the regress uses 15 s: the freeze is all or nothing) with `visibilityState` forced to hidden → clock unchanged; `nosave=1` → the key is byte-identical after a session. Reload a lot with 2 homes → 0 `town-status` events, 0 town toasts, identical bindings. |
+| R11 | Budget: `PERF_TOWN` with `spawn=20` (all 8 jobs) → render calls (town on) − (town hidden) ≤ 14; triangles ≤ 20k; town update EMA ≤ 0.6 ms; recompute ≤ 2 ms. Then the night worst case (R1 T1.13): the lot cleared, all 20 camping in 10 tents, time 0.9, every villager with a lantern → ≤ 14 calls and ≤ 20k triangles. A Show me highlight (R2 T2.4): every wish one resident can be given on `PERF_TOWN`, shown in turn → the ghost is one mesh, ≤ 20 calls, ≤ 22.6k triangles (measured: 28 wishes, worst 12 calls, 19,906 triangles with the apple tree). |
+| R12 | Determinism: two pages `town=fresh&townseed=7&townspeed=60` with the same scripted edits applied through `debug.edit(fn)` → identical `debug.state()` after `advance(3600)`. (The pages run with `visibilityState` hidden from the first script, so only `edit` / `advance` move the town clock, and each advance starts from a set sky time.) |
 | R13 | `node tools/batch-regress.mjs` passes (town off by default), and `HW_TOWN=1 node tools/batch-regress.mjs` (`town=fresh&townrender=0`) passes every check unchanged. |
 | R14 | Offline: every file under `js/town/` (14), `js/pieces/gifts.js` and `css/town.css` is in `sw.js` `CORE` (compared against the disk); `VERSION` = 5. |
 | R15 | A share code containing gift pieces imports with `dropped` 0; Pick on a placed gift copies it even while it is locked. |
 | R16 | Village off → no bubbles, hearth or chatter, clock frozen; on → every villager is re-seated on a free `mainRegion` cell or indoors; no errors. |
-| R17 | Passer-by (`--mobile`, fresh profile with the welcome lot): during a pass the passer-by's projected position is inside the free area (inside the canvas minus `rig.insets`) for ≥ 3 s in a row; while off-screen an arrow element is shown; the tip toast has a 👀 Watch button that starts follow. |
+| R17 | Passer-by (`--mobile`, fresh profile with the welcome lot): during a pass the passer-by's projected position is inside the free area (inside the canvas minus `rig.insets`) for ≥ 3 s in a row; while off-screen an arrow element is shown; the tip toast has a 👀 Watch button that starts follow. (The test first taps the meadow round the welcome card, as a player would: bubbles stay hidden under it.) |
 | R18 | Taps near villagers: a villager on the cottage's doorstep, the Door piece in hand: a tap on the wall at y = 2.0 m above the doorstep, and a tap 20 px beside the villager's body, each place the door and open no card; the same tap on the villager's chest with the Erase tool opens the card. |
 | R19 | Migration: a profile with an autosave and no town key → the intro card, no traveller while it is open; **Keep my meadow quiet** → `state.village` false. A second profile: **Lovely** → traveller ≤ `FIRST_ARRIVAL_DELAY` + 1 s later. |
 | R20 | Two tabs on one profile: the second page saves the town → the first page shows the Reload toast and writes the key no more (byte-identical after 60 s of play there). |
-| R21 | Life you can watch: `PERF_TOWN`, `spawn=20`, `timeFlow` on, `townspeed=60`, `advance(3600)` → `debug.outdoors()` ≥ 0.85; time pinned at 0.42 → ≥ 0.95. |
+| R1 (`repair1`) | Round-1 repairs (T1.x), real touch on an iPhone 13 profile: a full Home with a camper waiting names the camper on the "Could move in" row; Follow survives a pinch out / in, a one-finger-still pinch and a twist, and a two-finger slide ends it; the "one more bed" Show me ends once the ghost bed is tapped; undoing a clear says "back home", a camper into a new hut "moving into"; no vacancy bubble for a bed a camper is about to take (stepping the town clock tick by tick). |
+| R2 (`repair2`) | Round-2 repairs (T2.x), real touch on an iPhone 13 profile: the camp bubble high on screen is never covered by its one-time tip toast and goes back under its anchor once the toast has gone; the camp Show me with no Home (and the `w_neighbour` one) draws its ghost foundation as one mesh with a finite box, `highlightHit` at the free area's four corners is −1, and with the foundation in hand a tap on grass far from the rings builds there while a tap on a ring builds on it; after a reload with the tray collapsed the handle reads "Show pieces" (`aria-expanded` false). |
+| R21 | Life you can watch: `PERF_TOWN`, `spawn=20`, `timeFlow` on, `townspeed=60`, `advance(3600)` → `debug.outdoors()` ≥ 0.85; time pinned at 0.42 → ≥ 0.95. (M2 also checks that after the hour, at 10:00, nobody is asleep or on a night stroll.) |
 
 ### 13.5 Rules for working in parallel
 
@@ -2234,6 +2498,11 @@ build them with `world.add(…, { record: false })` after `world.clear`):
    leaves the town paused.
 8. README and ARCHITECTURE.md describe the feature; `docs/LIVING.md` is this spec, with any changes made during the
    build folded in.
+
+*Status at M3 (headless):* items 1–4, 6–8 hold (the suites, real-touch runs and offline test of §13.3 M3). Item 5:
+every §12.11 budget passes its own headless test (R3, R11, B9, L1, L9; §12.11 *measured*), though `sim.tick`
+measured live between frames on a loaded machine is 0.17–0.30 ms, above the 0.1 ms tight-loop budget; the phone
+median `app.fps` ≥ 45 needs the owner's device.
 
 ### 14.2 Playtest checklist for the owner
 
@@ -2310,7 +2579,11 @@ like a goal or a wall, and the job change at the cap (§17).
 | `HOME_SLACK` | 1 flaw (gap or unroofed cell) | 7 |
 | `POCKET_MAX` | 64 cells (ground floors, §3.1) | 9 |
 | `HOME_MATCH`, `FEET_KEPT` | 0.3 footprint overlap, 3 footprints per villager | 9 |
-| `PASSERBY` | first at 12 s after `ready`, every 180 s, ≤ 3 per session; 1.6 m/s; viewing spot §4.7 | 8 |
+| `PASSERBY` | first at 12 s after `ready` (held while a card covers the meadow), every 180 s, ≤ 3 per session; 1.6 m/s; viewing spot §4.7, `PASSERBY_VIEW_BACK` 2 cells up the path | 8 |
+| `FIRST_CHORE`, `FIRST_WISH_NEAR` | 20–30 s by the door after moving in; a first wish within 4 cells of a door (one piece, outdoors, S) | **2** |
+| `NIGHT_STROLL_WAKE_GAP` | 2.5 h before the villager's wake hour (time flowing) | 3 |
+| `HUM_CHEERFUL`, `HUM_GLOWING` | 20–40 s, 10–20 s between hums while walking (§9.2) | 4 |
+| `COST_NEAR_BLOOM` | +0.3 on cells beside a bloom | 9 |
 | `MAX_VILLAGERS`, `BEDS_PER_HOME_MAX` | 20, 4 | 9 |
 | Nav costs | path 0.55, deck/steps 0.8, grass 1.0, ring 1.5, blooms +6, soft items §6.1; `HOP_COST` +25 (fences, hedges, half walls, railings; gates open); wall/blocked +200 | 9 |
 | `PATHS_PER_FRAME` | 4 | 9 |
