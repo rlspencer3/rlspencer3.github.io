@@ -415,7 +415,7 @@ with the village's logic on (`town=fresh&townrender=0`).
 
 `node tools/town-regress.mjs` runs the village regression (R1–R21 of docs/LIVING.md §13.4: homes, arrivals, Show me,
 gifts, guided mode, photo mode, persistence, two tabs, never evicted, never stuck, the draw-call budget…, plus the
-`repair1` to `repair6` sections' real-touch checks and repair5's overlap audit of full town days) in 10 to 30
+`repair1` to `repair7` sections' real-touch checks and repair5's overlap audit of full town days) in 10 to 30
 minutes, depending on the machine, and exits 1 on any failure; `--only=showme,gifts` runs some sections, `--batch`
 adds both batch-regress runs. The per-package checks run as `shot.mjs` scripts: `--script tools/town-brain.js` (the brain),
 `tools/town-look.js` (the villagers' look) and `tools/town-hud.js` (bubbles and cards).

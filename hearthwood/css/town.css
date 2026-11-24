@@ -90,6 +90,8 @@
   overflow: visible; filter: drop-shadow(0 1px 2px rgba(40, 25, 10, 0.35));
 }
 .hw-bubble.is-edge .hw-bubble-arrow { display: block; }
+/* an edge bubble's badge (×N) sits opposite its arrow (hud.js sets --bx / --by from the arrow's angle) */
+.hw-bubble.is-edge .hw-bubble-badge { right: auto; left: calc(19px + var(--bx, 15px)); top: calc(19px + var(--by, -15px)); transform: translate(-50%, -50%); }
 /* a passer-by has no bubble: only a small paper disc with the arrow, while off-screen */
 .hw-bubble.k-passerby { width: 30px; height: 30px; pointer-events: none !important; }
 .hw-bubble.k-passerby .hw-bubble-arrow { --arrow-r: 22px; }

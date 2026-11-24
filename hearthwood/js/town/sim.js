@@ -257,6 +257,7 @@ export function createSim({ save = null, readOnly = false } = {}) {
     for (const [v, p] of changes) {
       const prev = v.status;
       const prevHome = v.homeId;
+      const prevBed = v.bed;
       // drop the open wish silently (§3.5)
       if (v.wish) v.wish = null;
       v.nextWishAt = Math.max(v.nextWishAt, st.clock + TUNE.REWISH_AFTER_MOVE);
@@ -300,6 +301,15 @@ export function createSim({ save = null, readOnly = false } = {}) {
         if (!stay) {
           endActivity(v); v._steps = []; v._act = null;
           if (v.plan.kind === 'pose' || v.plan.kind === 'inside') cutPlan(v);
+        }
+      }
+      // still posed inside the same home with a different bed (or none): book the indoor place again now, so a
+      // sleeper moves to the new bed (or a sofa / bedroll) instead of lying where the old bed was until morning
+      if (v._loc === 'in' && v.plan?.kind === 'inside' && prevHome && v.homeId === prevHome && v.bed !== prevBed) {
+        const hb = B(v.homeId);
+        if (hb) {
+          if (v.plan._kind === 'sleep' && v.status === 'resident' && v.bed) { const [, x, y, z] = v.bed.split('|'); v.plan._spot = `bed|${x}|${y}|${z}`; }
+          recheckInside(v, hb);
         }
       }
     }
@@ -574,7 +584,8 @@ export function createSim({ save = null, readOnly = false } = {}) {
       if (!v.bed) return null;
       const [, x, y, z] = v.bed.split('|').map(Number);
       const bed = ix.I.get(ck(x, y, z));
-      return bed && (!strict || (bed.t === 'bed' && b.cells.has(ck(x, y, z)))) ? { bed, x, y, z } : null;
+      // only a real bed: a tap of another piece on the bed replaces it in one edit (the sleeper is booked again)
+      return bed && bed.t === 'bed' && (!strict || b.cells.has(ck(x, y, z))) ? { bed, x, y, z } : null;
     };
     if (kind === 'sleep' && v.status === 'resident') {
       const o = bedOf(false);

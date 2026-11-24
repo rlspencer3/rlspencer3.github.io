@@ -444,15 +444,16 @@ export function createHud(app, { root, topLeft, toast, ask } = {}) {
       keepIn(item, dist, fl, ft, fr);                // camp, fix-up, almost, vacancy, gift: clear of the bars (T1.10)
       taps.push(item);
     }
-    // priority, nearest first; merge neighbours closer than 36 px; at most 6. Edge bubbles merge with each other the
-    // same way when their edge points are closer than their 48 px circle (R6 T6.3): housemates indoors share the
-    // roof anchor, so off screen (or in the cutaway, with the roof above the top bar) their two arrows landed on one
-    // point, one hiding the other with no ×2
+    // priority, nearest first; merge neighbours closer than 36 px; at most 6. Edge bubbles OF THE SAME KIND merge with
+    // each other the same way when their edge points are closer than their 48 px circle (R6 T6.3): housemates indoors
+    // share the roof anchor, so off screen (or in the cutaway, with the roof above the top bar) their two arrows landed
+    // on one point, one hiding the other with no ×2. Edge bubbles of different kinds never merge (a traveller up the
+    // lane would swallow an off-screen wisher the same way, and a tap only follows the traveller): they fan apart below
     taps.sort((a, c) => (ORDER[a.b.kind] ?? 9) - (ORDER[c.b.kind] ?? 9) || a.dist - c.dist);
     const shown = [];
     for (const it of taps) {
       if (shown.length >= BUBBLE_MAX) break;
-      const near = it.edge ? shown.find((s) => s.edge && Math.hypot(s.edge.x - it.edge.x, s.edge.y - it.edge.y) < EDGE_MERGE_PX)
+      const near = it.edge ? shown.find((s) => s.edge && s.b.kind === it.b.kind && Math.hypot(s.edge.x - it.edge.x, s.edge.y - it.edge.y) < EDGE_MERGE_PX)
         : shown.find((s) => !s.edge && Math.hypot(s.x - it.x, s.y - it.y) < MERGE_PX);
       if (near) { near.count++; continue; }
       shown.push(it);
@@ -476,6 +477,25 @@ export function createHud(app, { root, topLeft, toast, ask } = {}) {
         }
         const s = scaleAt(it.dist), half = 19 * s, top = it.y - 46 * s;
         if (top < band.bottom && it.y > band.top && it.x + half > band.left && it.x - half < band.right) it.y = Math.min(fb, band.bottom + 46 * s + 4);
+      }
+    }
+    // edge bubbles of different kinds at one point fan along the edge by a circle (nearest free place first, never
+    // into the toast / checklist band), so each keeps its own tap; their arrows still point at their own targets
+    {
+      const placed = [], midX = (fl + fr) / 2, halfW = (fr - fl) / 2 - EDGE_PX;
+      const lim = (v, lo, hi) => (hi < lo ? v : Math.min(hi, Math.max(lo, v)));
+      const close = (e) => placed.some((q) => Math.hypot(q.x - e.x, q.y - e.y) < EDGE_MERGE_PX);
+      const inBand = (e) => { if (!band) return false; const x = edgeBox(e); return x.t < band.bottom && x.b > band.top && x.r > band.left && x.l < band.right; };
+      for (const it of shown) {
+        if (!it.edge) continue;
+        if (close(it.edge)) {
+          const side = Math.abs(it.edge.x - midX) >= halfW - 1;   // on the left / right edge: fan up or down
+          for (const d of [EDGE_MERGE_PX, -EDGE_MERGE_PX, 2 * EDGE_MERGE_PX, -2 * EDGE_MERGE_PX]) {
+            const e = side ? { ...it.edge, y: lim(it.edge.y + d, ft + EDGE_PX, fb - EDGE_PX) } : { ...it.edge, x: lim(it.edge.x + d, fl + EDGE_PX, fr - EDGE_PX) };
+            if (!close(e) && !inBand(e)) { it.edge = e; break; }
+          }
+        }
+        placed.push(it.edge);
       }
     }
     // the move-in nameplate never sits behind the toast stack: below it when the roof anchor is in the toast band
@@ -599,7 +619,12 @@ export function createHud(app, { root, topLeft, toast, ask } = {}) {
       if (r.edge !== true) { r.edge = true; el.classList.add('is-edge'); }
       const deg = (it.edge.a * 180) / Math.PI;
       const ad = Math.round(deg);
-      if (ad !== r.ang) { r.ang = ad; r.arrow.style.transform = `rotate(${ad}deg) translateX(var(--arrow-r, 26px))`; }
+      if (ad !== r.ang) {
+        r.ang = ad; r.arrow.style.transform = `rotate(${ad}deg) translateX(var(--arrow-r, 26px))`;
+        // the ×N badge sits on the far side from the arrow, so the arrow never covers it (css: .is-edge badge)
+        el.style.setProperty('--bx', `${(-Math.cos(it.edge.a) * 21).toFixed(1)}px`);
+        el.style.setProperty('--by', `${(-Math.sin(it.edge.a) * 21).toFixed(1)}px`);
+      }
       tf = `translate3d(${it.edge.x.toFixed(1)}px,${it.edge.y.toFixed(1)}px,0) translate(-50%,-50%)`;
     } else {
       if (r.edge !== false) { r.edge = false; el.classList.remove('is-edge'); }
