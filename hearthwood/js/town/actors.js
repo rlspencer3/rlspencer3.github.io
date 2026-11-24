@@ -5,8 +5,8 @@
 // it at the render clock: walks interpolated along their points (with fence hops, slips through walls and corners
 // rounded by a short look-ahead), poses animated procedurally (watering, chopping, fishing, reading, waving…),
 // indoor poses shown only on visible floors, doors and slips dither-faded, small jumps between plans eased and big
-// ones cross-faded. Cosmetic separation steering keeps walkers out of each other (never changing the logical
-// position). Cues become FX, hops, waves and the move-in glow. Nothing here feeds back into the sim.
+// ones cross-faded. Cosmetic separation steering keeps walkers out of each other, and draws apart two villagers posed
+// on one spot (never changing the logical position). Cues become FX, hops, waves and the move-in glow. Nothing here feeds back into the sim.
 //
 // createActors(app[, { render = true }]) → Actors:
 //   sync(models) · update(dt, clock, frame) · cue(c) · positionOf(id) · hitTest(sx, sy, pad) · setSpill(lights, levelOf)
@@ -28,6 +28,7 @@ const BUILD = [[0.92, 1, 0.92], [1.12, 1, 1.12], [1, 1.06, 1]];  // §2.3 build 
 const SEATED_MIN = 0.28;           // a pose spot this far above its floor is a seat (bench 0.42, log 0.30, stool 0.40)
 const STRIDE = 0.9;                // metres per full walk cycle (two steps)
 const HIT_R = 0.3;                 // hit capsule radius (§12.4)
+const POSE_SEP = 0.45;             // m: two posed villagers nearer than this are drawn apart (a backstop, R4 T4.4)
 const TENT_LANTERN = tentGeometry().userData.lantern;
 const PKEYS = ['armL', 'armR', 'sit', 'tool', 'hy', 'hp', 'lean', 'twist', 'rock', 'seat'];
 const FOLEY = new Set(['chop', 'splash', 'cluck', 'hum']);
@@ -85,7 +86,7 @@ export function createActors(app, opts = {}) {
     const a = {
       id: m.id, model: m, seen: gen, lookKey: null,
       plan: undefined, planId: undefined, cum: null, cumFor: null, seg: 0, puffKey: null,
-      x: 0, y: 0, z: 0, yaw: 0, ox: 0, oy: 0, oz: 0, lat: 0, jump: null,
+      x: 0, y: 0, z: 0, yaw: 0, ox: 0, oy: 0, oz: 0, lat: 0, sepX: 0, sepZ: 0, jump: null,
       appear: 0, removing: false, scrub: 1, drawn: false, fade: 0,
       walkAmp: 0, walkDist: 0, lpx: 0, lpz: 0, hasLast: false,
       p: { armL: 0, armR: 0, sit: 0, tool: 0, hy: 0, hp: 0, bob: 0, lean: 0, twist: 0, rock: 0, seat: 0 },
@@ -365,6 +366,24 @@ export function createActors(app, opts = {}) {
         }
       }
       a.lat += (clamp(push * 0.3, -0.3, 0.3) - a.lat) * ease(dt, a.walkAmp > 0.3 ? 4 : 2);
+      // the backstop for two villagers posed on one spot (the sim books places so it never happens, R4 T4.4): drawn
+      // apart to POSE_SEP, so they never read as one figure with two hats. Coincident ones split along the lower id's
+      // left–right axis, the lower id to its left
+      let sx = 0, sz = 0;
+      if (a.walkAmp < 0.3 && a.tg.kind === 'pose') {
+        for (const b of others) {
+          if (b === a || b.walkAmp >= 0.3 || b.tg.kind !== 'pose' || Math.abs(b.y - a.y) > 0.6) continue;
+          const dx = a.x - b.x, dz = a.z - b.z, d = Math.sqrt(dx * dx + dz * dz);
+          if (d >= POSE_SEP) continue;
+          let ux = 0, uz = 0;
+          if (d > 1e-3) { ux = dx / d; uz = dz / d; } else {
+            const lo = a.id < b.id ? a : b, sg = lo === a ? 1 : -1;
+            ux = Math.cos(lo.yaw) * sg; uz = -Math.sin(lo.yaw) * sg;
+          }
+          sx += ux * (POSE_SEP - d) / 2; sz += uz * (POSE_SEP - d) / 2;
+        }
+      }
+      a.sepX += (sx - a.sepX) * ease(dt, 4); a.sepZ += (sz - a.sepZ) * ease(dt, 4);
       // passing another villager: a wave, more often in a cosier town (§9.2: 20 / 40 / 60 / 80 %), once per meeting
       if (near && near !== a.met && nd < 1.6 && (a.walkAmp > 0.3 || near.walkAmp > 0.3) && a.model.status !== 'passerby') {
         if (Math.random() < WAVE_P[a.model.mood | 0] && time > a.waveUntil + 4) a.waveUntil = time + 1.4;
@@ -428,7 +447,7 @@ export function createActors(app, opts = {}) {
       const sc = a.scale;
       const hop = (tg.hopY || 0) + (time - a.hopT < 0.35 ? 0.28 * Math.sin(Math.PI * (time - a.hopT) / 0.35) : 0);
       const yaw = a.yaw + P.twist;
-      let ox = a.x + Math.cos(a.yaw) * a.lat, oz = a.z - Math.sin(a.yaw) * a.lat, oy = a.y;
+      let ox = a.x + Math.cos(a.yaw) * a.lat + a.sepX, oz = a.z - Math.sin(a.yaw) * a.lat + a.sepZ, oy = a.y;
       if (tg.lie) {
         // on the back, head toward +face (§12.3: for 'sleep' the bed's local −Z, its headboard), the body centre at
         // the spot: the feet (the body's origin) 0.6 m back along −face
@@ -591,6 +610,7 @@ export function createActors(app, opts = {}) {
   // ------------------------------------------------------------------ Show me highlight
 
   let hl = null;                   // { rings:[{x,y,z,b,sx,sz,yaw,hit,idx}], ghostIdx, box }
+  const FAINT = { b: 0.22, s: 0.5 };   // a later part's ring: brightness and size against a current one
   function highlight(h) {
     R.setGhost(null);
     hl = null;
@@ -602,7 +622,9 @@ export function createActors(app, opts = {}) {
       const wx = e.a === 'z' ? e.x * 2 : (e.x + 0.5) * 2, wz = e.a === 'z' ? (e.z + 0.5) * 2 : e.z * 2;
       list.push({ x: wx, y: floorY(e.y | 0) + 0.035, z: wz, b: 1, sx: 1.25, sz: 0.7, yaw: e.a === 'z' ? Math.PI / 2 : 0, hit: true, idx: idx++, edge: e });
     }
-    for (const c of h.faint || []) list.push({ x: c.x, y: (c.y || 0) + 0.035, z: c.z, b: 0.35, hit: false, idx: -1 });
+    // the later parts' spots: a small, dim, still ring, so they never read as a spot to tap now. The ring texture is
+    // additive and saturates on sunny grass at any brightness, so size and stillness carry the difference (R3 T3.1)
+    for (const c of h.faint || []) list.push({ x: c.x, y: (c.y || 0) + 0.03, z: c.z, b: FAINT.b, sx: FAINT.s, sz: FAINT.s, hit: false, idx: -1 });
     hl = { rings: list, ghostIdx: -1, box: null };
     if (h.ghost) {
       let obj = null;
@@ -644,7 +666,8 @@ export function createActors(app, opts = {}) {
     ringBuf.length = hl.rings.length;
     hl.rings.forEach((r, i) => {
       const o = ringBuf[i] || (ringBuf[i] = {});
-      o.x = r.x; o.y = r.y; o.z = r.z; o.b = r.b * br; o.sx = (r.sx || 1) * pulse; o.sz = (r.sz || 1) * pulse; o.yaw = r.yaw || 0;
+      const k = r.hit ? pulse : 1;                     // faint rings hold still
+      o.x = r.x; o.y = r.y; o.z = r.z; o.b = r.hit ? r.b * br : r.b; o.sx = (r.sx || 1) * k; o.sz = (r.sz || 1) * k; o.yaw = r.yaw || 0;
     });
     R.setRings(ringBuf);
   }

@@ -754,7 +754,11 @@ export async function init(app) {
     if (k !== undefined) rec.k = k; else delete rec.k;
     const n = world.normalize?.(rec) || rec;
     const key = world.keyOf(n);
-    if (key && world.get(key)) return false;
+    // a rec whose slot holds another piece is a swap (window boxes turn a wall_window into wall_window_shutters, the
+    // door hint turns a wall into a wall_door): builder.place replaces it as one undo step, as the builder's own tap
+    // does. Only a slot that already holds the wanted piece has nothing to build (R3 T3.5)
+    const cur = key ? world.get(key) : null;
+    if (cur && cur.t === n.t) return false;
     if (!world.validate(n)?.ok) return false;
     return !!app.builder.place(rec);
   }
@@ -767,7 +771,9 @@ export async function init(app) {
         try {
           if (live()) {
             if (snapToHighlight(x, y)) handled = true;            // a Show me spot: build exactly there
-            else {
+            // with the Build tool a Show me spot always wins over a villager standing on it (§12.7, R3 T3.5): a tap
+            // there that could not snap (another piece in hand) goes to the builder, never to the villager card
+            else if (!(state.tool === 'build' && highlightHit(x, y) >= 0)) {
               const id = hitTest(x, y, pad());
               if (id) { emit('town-select', { id }); handled = true; }
             }
@@ -911,7 +917,15 @@ export async function init(app) {
     const cells = [], edges = [], hits = [];
     for (const e of po.cur) if (!e.edge) { cells.push({ x: e.x, y: e.y, z: e.z }); hits.push(e); }
     for (const e of po.cur) if (e.edge) { edges.push(e.edge); hits.push(e); }
-    const faint = po.later.filter((e) => !e.edge).map((e) => ({ x: e.x, y: e.y, z: e.z }));
+    // the later parts' cells, faint, only where they could be tapped later from this view (R3 T3.1): on the current
+    // part's level and never a roof (a ring floating over the plan at roof height was a decoy that no tap could reach)
+    // and never on a cell that already has a ring (a bed over a foundation ring)
+    const lv = po.cur[0].level | 0, faint = [];
+    const ringed = (x, z) => cells.some((c) => Math.hypot(c.x - x, c.z - z) < 0.6) || faint.some((c) => Math.hypot(c.x - x, c.z - z) < 0.6);
+    for (const e of po.later) {
+      if (e.edge || (e.level | 0) !== lv || app.catalog.getDef(e.rec.t)?.layer === 'R' || ringed(e.x, e.z)) continue;
+      faint.push({ x: e.x, y: e.y, z: e.z });
+    }
     const g = fullRec(po.cur[0]);
     const def = app.catalog.getDef(g.t);
     if (def && g.m === undefined) { const m = app.builder.materialFor(def); if (m !== undefined) g.m = m; }

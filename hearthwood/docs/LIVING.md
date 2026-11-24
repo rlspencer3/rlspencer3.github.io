@@ -259,7 +259,9 @@ The card shows *"Mabel · Gardener 🌷 · 🌅 Early riser"*. Strings never use
 ### 2.6 Flavour lines (bank in `data.js` `LINES`; at least this content ships)
 
 **Selection.** One line shows on the villager card, picked deterministically from `rng(seed ^ townDay ^
-hash(situation))`, so it stays the same all town-day per situation. Priority:
+hash(situation))`, so it stays the same all town-day per situation. A thank-you's situation is the grant it is for
+(`granted#<grants>`), and it never repeats the previous thank-you, so two wishes granted on the same town day get two
+different lines (R3 T3.4). Priority:
 1. **event**: `movein` for 60 s after moving in, `granted` for 60 s after a grant, `waiting` / `camping` while in that
    status;
 2. Cozy tier line (`quiet` / `glowing`) with probability 0.15;
@@ -274,7 +276,7 @@ movein:   "Oh, it's even cosier inside than it looked from the lane!" · "I've h
           "Look at that door! I think we'll get along, this house and me." · "Home at last. I'll put the kettle on."
 granted:  "It's perfect. Thank you!" · "Oh! You remembered!" · "I'll think of you every time I see it." ·
           "Just what I was dreaming of." · "My heart is as full as a teapot." · "Look at that! I could hug it."
-          (shy: "Thank you… it's just right.")
+          (shy: "Thank you… it's just right." · "Oh… for me? Thank you.")
 waiting:  "A little fixing up and it'll be good as new." · "I don't mind the draught. It's an adventure!" ·
           "I'll sleep on the sofa until it's mended."
 camping:  "Sleeping under the stars is an adventure! Though a roof would be nice." ·
@@ -736,7 +738,7 @@ Lunch is 12:00–13:00 inside `day`.
 | Phase | Options (base weight) | Notes |
 |---|---|---|
 | morning | chore near home 50, walk to work early 20, porch/bench sit 20, check own mailbox 10 | Postie and Baker start with their round. Chores: water a bloom within 3 of DOOR, sweep the doorstep, stretch |
-| day | work 60, break on a seat 15, visit a working or seated villager within 15 m and chat 10–20 s 10, stroll to a pretty spot within 15 m (a bloom, tree, pond, gift or lamp) and admire 5–10 s 10, sit at a hangout 5 (bench, fire pit, tea table; the fire's evening bonus doesn't apply) | Lunch 12:00–13:00: break at the nearest SEAT_OUT within 10 cells, else DOOR1 |
+| day | work 60, break on a seat 15, visit a working or seated villager within 15 m and chat 10–20 s 10, stroll to a pretty spot within 15 m (a bloom, tree, pond, gift or lamp) and admire 5–10 s 10, sit at a hangout 5 (bench, fire pit, tea table; the fire's evening bonus doesn't apply) | Lunch 12:00–13:00: break at the nearest free SEAT_OUT within 10 cells, else DOOR1 (housemates take the door's stand point, then 0.7 m either side of it, then a step further out, each held as the plan is made, so two never pose on one spot, R3 T3.3; every doorstep pose takes one of these door slots, §6.5) |
 | evening | hangout 70, stroll 15, own porch 15 | Lamplighter's round first 17:30–19:30 |
 | home | inside 100 | Chatty: 30 % a doorstep chat if another home's DOOR1 is within 6 cells |
 | night | asleep in bed | **Lantern strolls**: every `NIGHT_STROLL_EVERY` (90 s of town clock) one villager (owls and stargazers first, then round-robin) gets up for `NIGHT_STROLL_LEN` (30 s): a lantern stroll along paths, a sit by the fire pit or under a lamp, or (stargazers) lying back on the grass looking up. Only a villager whose own phase is `night`, and (time flowing) at least `NIGHT_STROLL_WAKE_GAP` (2.5 h) before their wake hour; back in bed it is an ordinary night's sleep, which the wake hour ends (M2: a stroll used to end in an endless sleep that kept the villager in bed all the next day). Owls before their sleep hour: hangout at the fire pit or lamps 60, stroll with lantern 40 |
@@ -911,8 +913,23 @@ every 0.25 m) fails within 0.35 m of such a vertex.
 
 ### 6.5 Crowding
 
-* Seats and spots are reserved (one villager each).
+* **One place per villager, never shared** (R3 T3.3, R4 T4.4: two villagers posed on one point are drawn as one figure
+  with two hats). A villager holds one outdoor place at a time: its key (a seat or spot id, `cell|x|z` for a stand-by
+  or wander cell, `stand|x|z|k` for a door slot, `tent|x|z|k`) and its ground point. A place is free when no other
+  villager holds its key and none holds a point within `SPOT_GAP` (0.45 m; the nearest two seats of one piece are
+  0.6 m apart), so two keys naming one point can never put two villagers there. Every picker (seats, hangouts, porch,
+  stand-by cells, wander and path cells, the woodpile's front) takes only free places. The plan's first place is held
+  as the plan is made (housemates and neighbours plan within one exit window), each later stop's as its walk starts,
+  and a stop whose place another villager holds by then is dropped (the next step, or a fresh plan, takes over):
+  a hold is never overwritten. Holding a new place lets go of the old one; ending the activity lets go of it.
+* **Door slots**: every doorstep pose (lunch with no seat, a door chat, sweeping, the porch's own-doorstep spot, the
+  postie's and the baker's knock, a sweet tooth admiring the baker's door, the wave after a move-in, the first chore's
+  sweep) stands on one of the door's 5 slots: the stand point, 0.7 m either side of it, a step (0.8 m) further out
+  ±0.35 m. Sweeping takes only the stand point (one sweeper a door); a porch deck spot on the doorstep cell is left to
+  the slots. Two campers waiting by their tent stand either side of its mouth.
 * Cosmetic separation steering in actors (radius 0.55 m, lateral offset ≤ 0.3 m, never changes the logical position).
+  A backstop for posed villagers: two posed nearer than 0.45 m are drawn apart to 0.45 m (eased; coincident ones split
+  along the lower id's left–right axis), so even a pose the sim did not book never reads as one figure.
 * Head-on in a one-cell gap: the lower-priority walker (Shy first, else the higher id) waits 0.6 s with a little bow.
 * A second villager heading for the same doorstep waits a step back.
 * (Not built in Phase 1: the two waits above. Walks are timed plans the sim chains deterministically, so a wait has to
@@ -1098,11 +1115,14 @@ placing them in order always completes the wish.
    points of its ring, over the angles (the current one when within 1.2 rad of the preferred one, the preferred one,
    ± 90°, 180°) × phi (the usual one, then 0.6, then 0.38): the first view that sees all five points wins, else the one
    that sees most (ties keep that order); the search stops after 60 ms on a slow phone.
-4. **Highlight**: `actors.highlight({ cells, edges, ghost })`: a pulsing golden ring on every rec of the current part
-   (the later parts' cells faint) and a glowing ghost of the first missing rec (`world.buildPlaced(rec)` with
-   `materials.blueprintMat(true)`, the guided-build look, baked into one mesh so any piece costs one draw call, R2
-   T2.4). Every plan rec carries a rotation `r` (index.js's `fullRec` defaults a missing one to 0): a rec without one
-   built a ghost with a NaN matrix, never drawn, whose NaN hit box claimed every tap on the meadow (R2 T2.1).
+4. **Highlight**: `actors.highlight({ cells, edges, faint, ghost })`: a pulsing golden ring on every rec of the current
+   part, a small dim still ring (half size, 22 %) on each later part's cell that is on the current part's level, not a
+   roof and not already ringed (R3 T3.1: roof rings floated over the plan as untappable decoys and the faint rings,
+   additive on sunny grass, were as bright as the real ones), and a glowing ghost of the first missing rec
+   (`world.buildPlaced(rec)` with `materials.blueprintMat(true)`, the guided-build look, baked into one mesh so any
+   piece costs one draw call, R2 T2.4). Every plan rec carries a rotation `r` (index.js's `fullRec` defaults a
+   missing one to 0): a rec without one built a ghost with a NaN matrix, never drawn, whose NaN hit box claimed every
+   tap on the meadow (R2 T2.1).
 5. Event `town-showme` → the hud shows the hint toast (*"🌷 Tap a glowing spot to plant a Flower Patch for Mabel"*)
    and, for a plan of more than one piece, a **checklist chip** with no timer: *"🍽️ Table ✓ · Chairs 1/2"*, with ✕.
 6. **Re-target**: after every recompute while it is up, the plan is recomputed. When a part completes, the piece in
@@ -1314,17 +1334,25 @@ Strings never use pronouns (§2.4).
     building's highest roof panel or wall top over its DOOR1 side, never over the door itself, so they don't cover
     the spot where the player builds.
 * Scale 1.0 at ≤ 20 m camera distance, down to 0.8 at 40 m. Hidden beyond 45 m, behind the camera, or inside
-  `rig.insets`.
+  `rig.insets`. Wish and dream bubbles are never hidden by distance while their anchor is on screen (the 0.8 minimum
+  scale), and ride the edge off screen within `rig.maxRadius` + 30 m (R3 T3.2, R4 T4.2: a portrait phone frames the
+  stamped farmhouse from 48–55 m and the rig pulls back to 80 m, so a wisher plainly in view can be 75–110 m away).
 * At most **6** tappable bubbles shown, by priority: traveller > wish > camp > fix-up > almost > vacancy > dream,
   nearest first. Up to 3 sleep 💤 bubbles. Bubbles closer than 36 px merge into one "×2" (tapping it opens the first).
-* **Wish and dream bubbles never vanish off an edge** (M2 feel check): off-screen (in front of the camera, within the
-  45 m cull) they ride the free area's edge with an arrow, as a traveller's does; on screen they are kept at least
+* **Wish and dream bubbles never vanish off an edge** (M2 feel check): off-screen (in front of the camera, within
+  `rig.maxRadius` + 30 m) they ride the free area's edge with an arrow, as a traveller's does; on screen they are kept at least
   24 px (× scale) inside its sides and 50 px below its top. The same keep-inside clamp holds for every other tappable
   bubble on screen (camp, fix-up, almost, vacancy, gift, an on-screen traveller; R1 T1.10), so none sits under the top
   bar or the hearth chip. While a toast is up, an on-screen tappable bubble whose box (38 × 46 px × scale, tail tip on
   the anchor) overlaps it sits just below the toast stack (R2 T2.2: the one-time camp tip used to cover the very camp
-  bubble it was about) and goes back when the toast has gone. A 💤 that shares its roof anchor with a tappable bubble
-  moves 34 px aside; the move-in nameplate drops below the toast stack when its anchor is in the toast band.
+  bubble it was about) and goes back when the toast has gone. The Show me checklist chip sits in the same top stack
+  for the whole Show me, so the band is the toast stack joined with the chip while it shows (R3 T3.6: the chip covered
+  a camp bubble that had dodged below the toasts, and then its anchor, so a tap on the bubble did nothing). An edge
+  bubble whose box (its 48 px hit circle and its arrow) meets the band rides the edge of the free area below the band
+  instead, arrow tip ≥ 4 px clear (R4 T4.1: Show me turns the camera to the plan site, the wisher often ends up just
+  above the view, and his own wish bubble sat under the chip for the whole Show me, untappable). A 💤 that
+  shares its roof anchor with a tappable bubble moves 34 px aside; the move-in nameplate drops below the toast stack
+  when its anchor is in the toast band.
 * Hidden in photo mode, while the menu sheet or a dialog is open, and with villagers off. Dimmed to 40 % while guided
   (§4.1).
 * **Gestures pass through bubbles**: every bubble gets `pointer-events: none` while `rig.mode` is `aim` or `draw`. A
@@ -1839,7 +1867,9 @@ export function createActors(app, { render = true } = {}) → Actors   // render
 //   setCamp(tents: [{ x, z }])             world-metre tent centres, door toward +X, y = 0
 //   highlight(h: { cells:[{x,y,z}], faint?:[{x,y,z}], edges?:[{x,z,y,a}], ghost?:Rec } | null)
 //                                          cells in world metres (y = the spot surface, as SpotPlan recs carry); edges
-//                                          = SpotPlan rec.edge (grid edge, y = level); faint rings at 35 %, not hittable
+//                                          = SpotPlan rec.edge (grid edge, y = level); faint rings half size at 22 %,
+//                                          still (no pulse), not hittable; index.js sends only the later parts' cells on
+//                                          the current level that are not roofs and not already ringed (R3 T3.1)
 //   highlightHit(sx, sy) → number          index into [...h.cells, ...h.edges] (cells first) whose ring (radius 0.9 m
 //                                          at the spot's surface) or the ghost's world box the screen ray passes
 //                                          through (a ghost hit → the ring nearest the ghost's slot; only a finite,
@@ -1985,7 +2015,8 @@ the spec owner (§13.5) instead of editing.
   rig.onTap = (x, y, e) => {
     if (live()) {
       if (snapToHighlight(x, y)) return;                       // a Show me spot: build exactly there
-      const id = town.hitTest(x, y, pad());
+      const spot = state.tool === 'build' && actors.highlightHit(x, y) >= 0;   // …and never a villager on it (T3.5)
+      const id = !spot && town.hitTest(x, y, pad());
       if (id) { events.emit('town-select', { id }); return; }
     }
     town.follow(null);
@@ -2001,12 +2032,16 @@ the spec owner (§13.5) instead of editing.
   };
   ```
   * `snapToHighlight(x, y)` works only while a Show me is up, `state.tool === 'build'` and `state.pieceId` is the
-    current part's piece (or one of its `alt`). With `i = actors.highlightHit(x, y)` ≥ 0 and that rec still free and
-    valid (`world.validate`), it calls `builder.place({ ...rec, m, c, k })` with `m = builder.materialFor(def)`,
-    `c = builder.colorFor(def, m)` and `k = def.accent ? state.accent : undefined`, exactly what a normal placement
-    uses (one undo step, the usual pop-in, sfx and `placed` event), and swallows the tap. Otherwise it returns false
-    and the tap goes on as usual. A tap on the top of a ghost bench that would hit the house wall behind it still
-    lands on the bench's spot.
+    current part's piece (or one of its `alt`). With `i = actors.highlightHit(x, y)` ≥ 0 and that rec valid
+    (`world.validate`) and its slot free or holding another piece (a **swap** rec: window boxes turn a `wall_window`
+    into `wall_window_shutters`, the door hint turns a `wall` into a `wall_door`; `builder.place` replaces it as one
+    undo step, R3 T3.5; only a slot already holding the wanted piece is skipped), it calls
+    `builder.place({ ...rec, m, c, k })` with `m = builder.materialFor(def)`, `c = builder.colorFor(def, m)` and
+    `k = def.accent ? state.accent : undefined`, exactly what a normal placement uses (one undo step, the usual
+    pop-in, sfx and `placed` event), and swallows the tap. Otherwise it returns false and the tap goes on as usual,
+    except that with the Build tool a tap on a highlight never reaches a villager standing there (it goes to the
+    builder, R3 T3.5). A tap on the top of a ghost bench that would hit the house wall behind it still lands on the
+    bench's spot.
   * Press-and-hold still builds: an aim that ends anywhere but on a highlight goes to the builder's `aimEnd`
     unchanged, and draw strokes are never touched.
 * **hitTest(sx, sy, pad)** = `actors.hitTest(sx, sy, pad)` → `{ id, dist }`, then **occlusion**: when
@@ -2446,9 +2481,9 @@ build them with `world.add(…, { record: false })` after `world.clear`):
 | R6 | Never evict: remove the roof → `waiting` (after 3 s); after 60 s → a fix-up bubble; undo → resident + `town-fixed`. Remove a roof and put it back within 2 s → 0 `town-status` events. `newBuild()` with 3 residents → exactly 1 camping toast, camp mesh visible; undo → resident with the same bed. Load the farmhouse via `loadBuild(data, { record: true })` → moving day into it (1 toast); undo → back. |
 | R7 | Never stuck: wall-box a villager's cell / drop a pond on them / fence them in → `debug.stuck()` empty within 2 s each. Villagers living in N1 and N2 for 10 town minutes (`advance`) → `stuck()` empty and `stats().slips` 0. |
 | R8 | Guided: `startGuided('cottage')`, add every guide piece → no traveller while unfinished; at done === total → traveller ≤ 4 s + 0.5 s. **Without pressing Close**, keep running 3 minutes (`townspeed=10`): a move-in happens, a new wish appears, and every bubble has `dim: false`. Erase one guide piece → paused again. |
-| R9 | Photo mode: villagers drawn; bubbles hidden; a canvas tap does nothing. |
+| R9 | Photo mode: villagers drawn; bubbles hidden (polled up to 3 s after the 0.8 s settle: `.hw-hide-photo` hides with a 0.35 s visibility delay, and a loaded machine's 300–600 ms headless frames could still see it at one read, R3 T3.7); a canvas tap does nothing. |
 | R10 | Persistence: reload → same ids, names, wishes, clock ± 1 s; 60 s (the regress uses 15 s: the freeze is all or nothing) with `visibilityState` forced to hidden → clock unchanged; `nosave=1` → the key is byte-identical after a session. Reload a lot with 2 homes → 0 `town-status` events, 0 town toasts, identical bindings. |
-| R11 | Budget: `PERF_TOWN` with `spawn=20` (all 8 jobs) → render calls (town on) − (town hidden) ≤ 14; triangles ≤ 20k; town update EMA ≤ 0.6 ms; recompute ≤ 2 ms. Then the night worst case (R1 T1.13): the lot cleared, all 20 camping in 10 tents, time 0.9, every villager with a lantern → ≤ 14 calls and ≤ 20k triangles. A Show me highlight (R2 T2.4): every wish one resident can be given on `PERF_TOWN`, shown in turn → the ghost is one mesh, ≤ 20 calls, ≤ 22.6k triangles (measured: 28 wishes, worst 12 calls, 19,906 triangles with the apple tree). |
+| R11 | Budget: `PERF_TOWN` with `spawn=20` (all 8 jobs) → render calls (town on) − (town hidden) ≤ 14; triangles ≤ 20k; town update ≤ 0.6 ms (the live EMA, or the fastest of nine 60-update `town.update` batches); recompute ≤ 2 ms (the fastest of five 8-edit batch medians). Both wall-clock budgets are judged on the fastest batch, with the median and a same-page calibration loop reported, as T2.5 made L1 and B9 robust (R3 T3.7: one sample of each flaked on a shared, loaded machine; the budgets are unchanged). Then the night worst case (R1 T1.13): the lot cleared, all 20 camping in 10 tents, time 0.9, every villager with a lantern → ≤ 14 calls and ≤ 20k triangles. A Show me highlight (R2 T2.4): every wish one resident can be given on `PERF_TOWN`, shown in turn → the ghost is one mesh, ≤ 20 calls, ≤ 22.6k triangles (measured: 28 wishes, worst 12 calls, 19,906 triangles with the apple tree). |
 | R12 | Determinism: two pages `town=fresh&townseed=7&townspeed=60` with the same scripted edits applied through `debug.edit(fn)` → identical `debug.state()` after `advance(3600)`. (The pages run with `visibilityState` hidden from the first script, so only `edit` / `advance` move the town clock, and each advance starts from a set sky time.) |
 | R13 | `node tools/batch-regress.mjs` passes (town off by default), and `HW_TOWN=1 node tools/batch-regress.mjs` (`town=fresh&townrender=0`) passes every check unchanged. |
 | R14 | Offline: every file under `js/town/` (14), `js/pieces/gifts.js` and `css/town.css` is in `sw.js` `CORE` (compared against the disk); `VERSION` = 5. |
@@ -2460,6 +2495,8 @@ build them with `world.add(…, { record: false })` after `world.clear`):
 | R20 | Two tabs on one profile: the second page saves the town → the first page shows the Reload toast and writes the key no more (byte-identical after 60 s of play there). |
 | R1 (`repair1`) | Round-1 repairs (T1.x), real touch on an iPhone 13 profile: a full Home with a camper waiting names the camper on the "Could move in" row; Follow survives a pinch out / in, a one-finger-still pinch and a twist, and a two-finger slide ends it; the "one more bed" Show me ends once the ghost bed is tapped; undoing a clear says "back home", a camper into a new hut "moving into"; no vacancy bubble for a bed a camper is about to take (stepping the town clock tick by tick). |
 | R2 (`repair2`) | Round-2 repairs (T2.x), real touch on an iPhone 13 profile: the camp bubble high on screen is never covered by its one-time tip toast and goes back under its anchor once the toast has gone; the camp Show me with no Home (and the `w_neighbour` one) draws its ghost foundation as one mesh with a finite box, `highlightHit` at the free area's four corners is −1, and with the foundation in hand a tap on grass far from the rings builds there while a tap on a ring builds on it; after a reload with the tray collapsed the handle reads "Show pieces" (`aria-expanded` false). |
+| R3 (`repair3`) | Round-3 repairs (T3.x), real touch on an iPhone 13 profile: the camp Show me draws exactly one ring per foundation (no roof or bed ring floating over the plan), each a hit; the fire circle's later rings (benches) are at most 0.6× the size and 0.4× the brightness of the fire pit's, at its height; on the stamped farmhouse framed from ≈ 48 m a wish anchored > 45 m from the camera, villager on screen, still shows its bubble; a window-boxes Show me and a door-hint Show me, each with a villager posed on the spot: a real tap on the villager swaps the piece in (one undo step) and opens no card; with the camp Show me's checklist chip up and the camp bubble's anchor under it, the bubble moves clear and a real tap on it opens the camp card; two residents of a 2-bed hut with no outdoor seat take two doorstep spots ≥ 0.6 m apart at lunch (600 ticks stepped); three wishes of one villager granted in one town day get three different thank-you lines. |
+| R4 (`repair4`) | Round-4 repairs (T4.x), real touch: on an iPhone 13, the farmhouse Farmer's fire-circle wish opened and Show me tapped, then the camera moved so his anchor sits just above the free area's top: his edge bubble never overlaps the checklist chip, is topmost at its centre, and a real tap on it opens his card; on a 412 × 915 phone the stamped farmhouse's wisher on the farthest on-screen walkable cell (> 75 m) shows his bubble, and so does the wisher at the veg beds after four real pinch-outs to r 80; a flowing town day with 8 villagers in the cottage and two huts (seed 12): no two posed outdoors within 0.35 m, no two held places within 0.45 m, nobody stuck, and lunch, work, chores and hangouts all happen; two villagers posed on one point in the sim are drawn ≥ 0.4 m apart. |
 | R21 | Life you can watch: `PERF_TOWN`, `spawn=20`, `timeFlow` on, `townspeed=60`, `advance(3600)` → `debug.outdoors()` ≥ 0.85; time pinned at 0.42 → ≥ 0.95. (M2 also checks that after the hour, at 10:00, nobody is asleep or on a night stroll.) |
 
 ### 13.5 Rules for working in parallel
@@ -2566,7 +2603,7 @@ like a goal or a wall, and the job change at the cap (§17).
 | `COZY_FLOOR` | 15 + 2 × min(population, 10) | 4 |
 | Tier bounds | 25 / 50 / 75 | 4 |
 | `GIFT_AT` | 2, 4, 7, 10, 14, 18, 23, 28, 34, 40 | **5** |
-| `BUBBLE_MAX`, size, cull | 6, 38 px (48 px hit), 45 m | **6** |
+| `BUBBLE_MAX`, size, cull | 6, 38 px (48 px hit), 45 m (wish / dream: none on screen, `rig.maxRadius` + 30 m off screen) | **6** |
 | `ALMOST_DELAY`, `ALMOST_SHOW`, `SHED_CELLS` | 8 s, 60 s once per building, no bubble for bedless ≤ 6 cells | **6** (help or nag?) |
 | `VACANCY_SHOW` | 90 s, back on a tier change or a nearby recipe piece | 6 |
 | `FIXUP_DELAY` | 60 s | 6 |

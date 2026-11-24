@@ -51,7 +51,7 @@ export function createSim({ save = null, readOnly = false } = {}) {
   let hintState = new Map();                         // packed foot → { sig, since, shownAt, shown, kind }
   let tentCells = [];
   let campArea = null;
-  let reserved = new Map();                          // spot id → villager id
+  let reserved = new Map();                          // spot id → villager id (one place per villager: v._spot, v._spotAt)
   let outdoorT = 0, totalT = 0, slips = 0, tickMsSum = 0, tickCount = 0;
   let pending = false;
   let cozyCache = null, charm = 0, lastCozy = null;
@@ -77,11 +77,11 @@ export function createSim({ save = null, readOnly = false } = {}) {
     return v;
   }
   function initInner(v) {
-    v._loc = 'gone'; v._cell = null; v._pos = null; v._steps = []; v._act = null; v._phase = null; v._spot = null;
+    v._loc = 'gone'; v._cell = null; v._pos = null; v._steps = []; v._act = null; v._phase = null; v._spot = null; v._spotAt = null;
     v._jit = (rng(hash32(st.seed, v.seed, 'jit'))() * 2 - 1) * TUNE.SCHEDULE.jitter;
     v._grantUse = null; v._fadedAt = -Infinity; v._cueSched = []; v._bout = 0; v._roundAt = -Infinity;
     v._lunchAt = -Infinity; v._dreamDelay = false; v._statusAt = v.since || 0; v._deferred = false;
-    v._fixShown = false; v._line = null; v._lineKey = null; v._movedAt = -Infinity; v._grantedAt = -Infinity;
+    v._fixShown = false; v._line = null; v._lineKey = null; v._thanks = null; v._movedAt = -Infinity; v._grantedAt = -Infinity;
     v._pinnedN = 0;
   }
 
@@ -327,7 +327,7 @@ export function createSim({ save = null, readOnly = false } = {}) {
     v._cueSched = plan._cues || [];
   }
   function endActivity(v) {
-    if (v._spot) { if (reserved.get(v._spot) === v.id) reserved.delete(v._spot); v._spot = null; }
+    release(v);
     v.flags.tool = false; v.flags.basket = false; v.flags.book = false;
   }
   function posNow(v) {
@@ -375,11 +375,16 @@ export function createSim({ save = null, readOnly = false } = {}) {
           if (v.status === 'traveller' || v.status === 'passerby') { const f = world.nav.nearestFree(to[0], to[1], 4, true); if (f) { to = f; s.end = null; } }
           else { v._steps = []; return null; }
         }
+        // the place this walk goes to is booked as it starts (a doorstep pose takes its free slot now); a place another
+        // villager holds is never shared: this stop is dropped and the next step (or a fresh plan) takes over (R4 T4.4)
+        const nx = v._steps[0];
+        if (nx && nx.k === 'pose' && (nx.spot || nx.slot)) {
+          if (!claimPose(v, nx)) { while (v._steps.length && v._steps[0].k === 'pose') v._steps.shift(); return null; }
+          if (nx.slot) s.end = nx.at;
+        }
         const here = v._pos || cellCentre(from);
         if (from[0] === to[0] && from[1] === to[1] && !s.end) return null;
         pathBudget--;
-        const nx = v._steps[0];
-        if (nx && nx.k === 'pose' && nx.spot) { reserved.set(nx.spot, v.id); v._spot = nx.spot; }
         const p = world.nav.path(from, to, hash32(st.seed, v.seed, tickN, 'lane'));
         const raw = Array.from(p.pts);
         // start exactly where the villager stands
@@ -422,12 +427,12 @@ export function createSim({ save = null, readOnly = false } = {}) {
         return { kind: 'walk', pts, len, t0, t1: t0 + Math.max(0.05, len / speed), hops: [], slips: [], hurry: false };
       }
       case 'pose': {
+        if ((s.spot || s.slot) && !claimPose(v, s)) return null;     // its place is someone else's now: skip it
         const dur = s.dur ?? 5;
         const plan = { kind: 'pose', at: s.at, face: s.face ?? 0, pose: s.pose || 'stand', t0, t1: dur === Infinity ? Infinity : t0 + dur, level: 0 };
         if (s.ground) plan.ground = s.ground;
         if (s.piece) plan.piece = s.piece;
         plan._cues = (s.cues || []).map((c) => ({ ...c, next: t0 + (c.first ?? c.every ?? 0) }));
-        if (s.spot) { reserved.set(s.spot, v.id); v._spot = s.spot; }
         if (s.flags) Object.assign(v.flags, s.flags);
         v._pos = s.ground || [s.at[0], surfaceAt(s.at[0], s.at[2]), s.at[2]];
         if (s.cell) v._cell = s.cell;
@@ -626,20 +631,19 @@ export function createSim({ save = null, readOnly = false } = {}) {
     if (!world) return null;
     const nav = world.nav;
     const from = v._cell || [0, 0];
+    const tx = (p.x + 0.5) * CELL, tz = (p.z + 0.5) * CELL;
+    const spotAt = (x, z) => { const [cxw, , czw] = nav.centre(x, z); return [cxw + (tx - cxw) * 0.2, nav.surface[ci(x, z)], czw + (tz - czw) * 0.2]; };
     let best = null, bd = Infinity;
     for (const [dx, dz] of [[0, 1], [1, 0], [0, -1], [-1, 0]]) {
       const x = p.x + dx, z = p.z + dz;
       if (!nav.inMain(x, z)) continue;
-      if ([...reserved.keys()].some((k) => k === `cell|${x}|${z}` && reserved.get(k) !== v.id)) continue;
+      if (!placeFree(`cell|${x}|${z}`, spotAt(x, z), v)) continue;
       const d = Math.abs(x - from[0]) + Math.abs(z - from[1]) + (dz === 1 ? -0.1 : 0);
       if (d < bd) { bd = d; best = [x, z]; }
     }
     if (!best) return null;
-    const [cxw, , czw] = nav.centre(best[0], best[1]);
-    const tx = (p.x + 0.5) * CELL, tz = (p.z + 0.5) * CELL;
-    const ax = cxw + (tx - cxw) * 0.2, az = czw + (tz - czw) * 0.2;
-    const at = [ax, nav.surface[ci(best[0], best[1])], az];
-    return { cell: best, at, face: yawTo(ax, az, tx, tz), pose, spot: `cell|${best[0]}|${best[1]}` };
+    const at = spotAt(best[0], best[1]);
+    return { cell: best, at, face: yawTo(at[0], at[2], tx, tz), pose, spot: `cell|${best[0]}|${best[1]}` };
   }
   const gotoPose = (sp, pose, dur, extra = {}) => [
     { k: 'walk', to: sp.cell, end: sp.ground || sp.at, hurry: extra.hurry, speed: extra.speed },
@@ -648,8 +652,79 @@ export function createSim({ save = null, readOnly = false } = {}) {
   const outItems = () => world.index.items.filter((p) => (p.y | 0) === 0 && !inside.has(ck(p.x, 0, p.z)));
   const within = (recs, cells, R) => recs.filter((p) => dist(p.x, p.z, cells) <= R);
   const dur = (v, key, tag) => { const [a, b] = TUNE.DUR[key]; const r = R(v, tag || key); return range(r, a, b) * (1 + (r() * 2 - 1) * TUNE.DUR_JITTER * 0.5); };
-  const freeSpot = (s) => !reserved.has(s.id);
+  // ---- places held (§5.5, R3 T3.3, R4 T4.4): a villager holds one outdoor place at a time (v._spot, its key, and
+  // v._spotAt, its ground point), booked when the plan is made and again as the walk to it starts. A place is free
+  // when no other villager holds its key and no other villager holds a point within SPOT_GAP of it, so two keys that
+  // name one point (a doorstep, a seat's approach, a cell centre) can never put two villagers on it: two figures
+  // posed on one spot are drawn as one, with two hats
+  const SPOT_GAP = 0.45;                               // m; the nearest two seats of one piece are 0.6 m apart
+  const spotPoint = (sp) => sp.ground || sp.at;
+  /** The villager who holds a key; a stale entry (its holder gone, or holding another place now) is dropped. */
+  function holderOf(key) {
+    const id = reserved.get(key);
+    if (!id) return null;
+    const u = villagers.find((x) => x.id === id);
+    if (u && u._spot === key) return u;
+    reserved.delete(key);
+    return null;
+  }
+  /** Is a place (key, ground point) free for v (null: for anyone)? */
+  function placeFree(key, at, v = null) {
+    const h = key ? holderOf(key) : null;
+    if (h && h !== v) return false;
+    if (!at) return true;
+    for (const u of villagers) {
+      const p = u._spotAt;
+      if (u === v || !p || !u._spot) continue;
+      if (Math.abs(p[0] - at[0]) < SPOT_GAP && Math.abs(p[2] - at[2]) < SPOT_GAP && Math.abs((p[1] || 0) - (at[1] || 0)) < 1
+        && Math.hypot(p[0] - at[0], p[2] - at[2]) < SPOT_GAP) return false;
+    }
+    return true;
+  }
+  /** v holds a place (and lets go of the one it held); false, changing nothing, when the place is not free. */
+  function hold(v, key, at) {
+    if (!placeFree(key, at, v)) return false;
+    if (v._spot && v._spot !== key && reserved.get(v._spot) === v.id) reserved.delete(v._spot);
+    reserved.set(key, v.id); v._spot = key; v._spotAt = at ? [at[0], at[1] || 0, at[2]] : null;
+    return true;
+  }
+  function release(v) {
+    if (v._spot && reserved.get(v._spot) === v.id) reserved.delete(v._spot);
+    v._spot = null; v._spotAt = null;
+  }
+  /** Book a pose step's place for v. A doorstep pose (`slot`: a doorUse) takes a free door slot now, and the step is
+   *  moved onto it; `slot0` keeps it to the stand point itself (sweeping). false: the place is taken. */
+  function claimPose(v, s) {
+    if (s.slot && !s.spot) {
+      const sl = doorSlot(v, s.slot, !!s.slot0);
+      if (!sl) return false;
+      s.at = sl.at; s.spot = sl.spot; s.ground = null;
+      return true;
+    }
+    if (!s.spot) return true;
+    return hold(v, s.spot, s.ground || s.at);
+  }
+  const freeSpot = (s) => placeFree(s.id, spotPoint(s));
   const seatSpot = (v, spots) => spots.filter(freeSpot).sort((a, b) => dist(a.approach[0], a.approach[1], [v._cell || [0, 0]]) - dist(b.approach[0], b.approach[1], [v._cell || [0, 0]]) || (a.id < b.id ? -1 : 1))[0] || null;
+  /** A place to stand a while on a home's doorstep: the door's stand point, else beside it or a step further out on
+   *  the same doorstep cell. Every doorstep pose takes one (lunch, a door chat, sweeping, the porch's door spot, the
+   *  postie's and the baker's knock, a sweet tooth admiring the baker's door, the wave after a move-in), so two of
+   *  them never share the stand point and fuse into one figure (R3 T3.3, R4 T4.4). Held at once: two housemates often
+   *  plan in the same second. only0: the stand point or nothing. → { at, spot }, or null when all are taken */
+  const DOOR_SLOTS = [[0, 0], [0.7, 0], [-0.7, 0], [0.35, 0.8], [-0.35, 0.8]];   // [sideways, further out] m
+  function doorSlot(v, du, only0 = false) {
+    if (!du || !world) return null;
+    const ox = Math.sin(du.out), oz = Math.cos(du.out);
+    for (let k = 0; k < (only0 ? 1 : DOOR_SLOTS.length); k++) {
+      const [sd, fw] = DOOR_SLOTS[k];
+      const at = [du.stand[0] - oz * sd + ox * fw, du.stand[1], du.stand[2] + ox * sd + oz * fw];
+      const spot = `stand|${du.step[0]}|${du.step[1]}|${k}`;
+      if (hold(v, spot, at)) return { at, spot };
+    }
+    return null;
+  }
+  /** A doorstep pose whose slot is taken when its walk starts (rounds and other plans with several stops). */
+  const doorPose = (du, pose, face, dur, extra = {}) => ({ k: 'pose', pose, at: du.stand, face, dur, cell: du.step, slot: du, ...extra });
   const spotSteps = (sp, dur, pose, extra = {}) => [
     { k: 'walk', to: sp.approach, end: sp.ground || [sp.at[0], surfaceAt(sp.at[0], sp.at[2]), sp.at[2]], hurry: extra.hurry },
     { k: 'pose', pose: pose || sp.pose, at: sp.at, face: sp.face, dur, cell: sp.approach, spot: sp.id, ground: sp.ground || [sp.at[0], surfaceAt(sp.at[0], sp.at[2]), sp.at[2]], cues: extra.cues, flags: extra.flags },
@@ -670,8 +745,15 @@ export function createSim({ save = null, readOnly = false } = {}) {
     return v._cell || [0, 0];
   }
 
-  /** Fill v._steps with the next activity. */
+  /** Fill v._steps with the next activity, and book its first place at once (R4 T4.4): villagers who plan within one
+   *  exit window each see the places the others have just picked. A plan whose first pose names no place holds none. */
   function planActivity(v) {
+    planInner(v);
+    const s = v._steps.find((x) => x.k === 'pose');
+    if (s && (s.spot || s.slot)) claimPose(v, s);       // taken (rare: every picker checks): the walk start drops it
+    else release(v);
+  }
+  function planInner(v) {
     if (!world) { v._steps = [{ k: 'pose', pose: 'stand', at: v._pos || [0, 0, 0], dur: 2 }]; return; }
     endActivity(v);
     const ctx = lastCtx;
@@ -692,7 +774,8 @@ export function createSim({ save = null, readOnly = false } = {}) {
         const other = world.homes.find((h) => h.id !== b.id && mainDoor(h) && dist(mainDoor(h).step[0], mainDoor(h).step[1], [homeDoorCell(v)]) <= 6);
         if (other && v._loc !== 'in') {
           const du = doorUse(other);
-          if (du) { v._act = 'doorchat'; v._steps = [{ k: 'walk', to: du.step, end: du.stand }, { k: 'pose', pose: 'chat', at: du.stand, face: du.face, dur: dur(v, 'chat'), cell: du.step }]; return; }
+          const sl = doorSlot(v, du);
+          if (sl) { v._act = 'doorchat'; v._steps = [{ k: 'walk', to: du.step, end: sl.at }, { k: 'pose', pose: 'chat', at: sl.at, face: du.face, dur: dur(v, 'chat'), cell: du.step, spot: sl.spot }]; return; }
         }
       }
       goHome(v, b, phase === 'night' ? 'sleep' : 'sit', phase);
@@ -727,9 +810,12 @@ export function createSim({ save = null, readOnly = false } = {}) {
       const seats = world.spots.filter((s) => s.kind === 'seat' && S.SEAT_OUT.has(s.piece) && dist(s.approach[0], s.approach[1], [homeDoorCell(v)]) <= 10);
       const sp = seatSpot(v, seats);
       v._act = 'lunch';
-      if (sp) { v._steps = [...exitSteps(v), ...spotSteps(sp, dur(v, ctx.flowing ? 'break' : 'breakPinned'), 'sit')]; return; }
+      // the seat / doorstep place is reserved as the plan is made, not when the walk starts: housemates plan lunch
+      // within a second of each other (R3 T3.3)
+      if (sp && hold(v, sp.id, spotPoint(sp))) { v._steps = [...exitSteps(v), ...spotSteps(sp, dur(v, ctx.flowing ? 'break' : 'breakPinned'), 'sit')]; return; }
       const du = doorUse(b);
-      if (du) { v._steps = [...exitSteps(v), { k: 'walk', to: du.step, end: du.stand }, { k: 'pose', pose: 'stand', at: du.stand, face: du.out, dur: dur(v, 'break'), cell: du.step }]; return; }
+      const sl = doorSlot(v, du);
+      if (sl) { v._steps = [...exitSteps(v), { k: 'walk', to: du.step, end: sl.at }, { k: 'pose', pose: 'stand', at: sl.at, face: du.out, dur: dur(v, 'break'), cell: du.step, spot: sl.spot }]; return; }
     }
     const W = activityWeights(v, phase);
     const choice = weighted(R(v, 'act'), W) || 'wander';
@@ -761,9 +847,16 @@ export function createSim({ save = null, readOnly = false } = {}) {
       case 'work': return workSteps(v);
       case 'chore': return choreSteps(v);
       case 'porch': {
-        const sp = world.spots.filter((s) => (s.kind === 'porch' && s.home === v.homeId) || (s.kind === 'door' && s.home === v.homeId)).filter(freeSpot)[0];
-        if (!sp) return [];
-        return spotSteps(sp, dur(v, 'break'), sp.kind === 'porch' ? 'stand' : 'stand');
+        // a deck spot by the door, else the doorstep itself: the door's stand point is a door slot like every other
+        // doorstep pose (a deck spot on that doorstep cell is left to the slots too), so a housemate sweeping there
+        // or at lunch is never stood on (R4 T4.4)
+        const du = doorUse(homeB(v));
+        const onStep = (sp) => du && sp.cell && sp.cell[0] === du.step[0] && sp.cell[1] === du.step[1];
+        const sp = world.spots.filter((s) => s.kind === 'porch' && s.home === v.homeId && !onStep(s)).filter(freeSpot)[0];
+        if (sp) return spotSteps(sp, dur(v, 'break'), 'stand');
+        if (!du || !world.spots.some((s) => s.kind === 'door' && s.home === v.homeId)) return [];
+        const sl = doorSlot(v, du);
+        return sl ? [{ k: 'walk', to: du.step, end: sl.at }, { k: 'pose', pose: 'stand', at: sl.at, face: du.out, dur: dur(v, 'break'), cell: du.step, spot: sl.spot }] : [];
       }
       case 'mailbox': {
         const m = myMailbox(v);
@@ -815,11 +908,15 @@ export function createSim({ save = null, readOnly = false } = {}) {
       const x = c[0] + Math.round((r() * 2 - 1) * TUNE.WANDER_RADIUS), z = c[1] + Math.round((r() * 2 - 1) * TUNE.WANDER_RADIUS);
       if (world.nav.inMain(x, z)) {
         const at = world.nav.centre(x, z);
-        return [{ k: 'walk', to: [x, z] }, { k: 'pose', pose: r() < 0.3 ? 'stretch' : 'stand', at, face: r() * 6.28 - 3.14, dur: dur(v, 'wander'), cell: [x, z] }];
+        if (!placeFree(`cell|${x}|${z}`, at, v)) continue;            // never on another villager's spot (R4 T4.4)
+        return [{ k: 'walk', to: [x, z] }, { k: 'pose', pose: r() < 0.3 ? 'stretch' : 'stand', at, face: r() * 6.28 - 3.14, dur: dur(v, 'wander'), cell: [x, z], spot: `cell|${x}|${z}` }];
       }
     }
     const f = world.nav.nearestFree(c[0], c[1], 6, true);
-    if (f) return [{ k: 'walk', to: f }, { k: 'pose', pose: 'stand', at: world.nav.centre(f[0], f[1]), face: 0, dur: dur(v, 'wander'), cell: f }];
+    if (f) {
+      const at = world.nav.centre(f[0], f[1]), key = `cell|${f[0]}|${f[1]}`;
+      return [{ k: 'walk', to: f }, { k: 'pose', pose: 'stand', at, face: 0, dur: dur(v, 'wander'), cell: f, spot: placeFree(key, at, v) ? key : undefined }];
+    }
     return [{ k: 'pose', pose: 'stand', at: v._pos || [0, 0, 0], face: 0, dur: 5 }];
   }
   function strollSteps(v, lantern) {
@@ -827,7 +924,7 @@ export function createSim({ save = null, readOnly = false } = {}) {
     if (v.trait === 'sweet' && !lantern && R(v, 'sweet')() < 0.35) {
       const baker = villagers.find((u) => u !== v && u.job === 'baker' && u.status === 'resident');
       const du = baker && doorUse(homeB(baker));
-      if (du && !du.back) return [{ k: 'walk', to: du.step, end: du.stand }, { k: 'pose', pose: 'admire', at: du.stand, face: du.face, dur: dur(v, 'admire'), cell: du.step, cues: [{ kind: 'bread', first: 1, every: 99, at: [du.stand[0], 1.5, du.stand[2]] }] }];
+      if (du && !du.back) return [{ k: 'walk', to: du.step, end: du.stand }, doorPose(du, 'admire', du.face, dur(v, 'admire'), { cues: [{ kind: 'bread', first: 1, every: 99, at: [du.stand[0], 1.5, du.stand[2]] }] })];
     }
     const pretty = outItems().filter((p) => S.PRETTY.has(p.t) || GIFTS[p.t]).filter((p) => dist(p.x, p.z, [me]) <= 8);
     const r = R(v, 'stroll');
@@ -871,7 +968,9 @@ export function createSim({ save = null, readOnly = false } = {}) {
       const p = pick(r, blooms), sp = standBy(v, p, 'water');
       if (sp) return gotoPose(sp, 'water', dur(v, 'chore'), { cues: [{ kind: 'drops', first: 1, every: 2, at: [(p.x + 0.5) * CELL, 0.4, (p.z + 0.5) * CELL] }], flags: { tool: v.job === 'gardener' } });
     }
-    if (x < 0.8 && du && !du.back && b && !reserved.has('sweep|' + b.id)) return [{ k: 'walk', to: du.step, end: du.stand }, { k: 'pose', pose: 'sweep', at: du.stand, face: du.out, dur: dur(v, 'chore'), cell: du.step, spot: 'sweep|' + b.id }];
+    // one sweeper a door, on the stand point itself: it is a door slot, so never where a housemate stands (R4 T4.4)
+    const sl = x < 0.8 && du && !du.back && b ? doorSlot(v, du, true) : null;
+    if (sl) return [{ k: 'walk', to: du.step, end: sl.at }, { k: 'pose', pose: 'sweep', at: sl.at, face: du.out, dur: dur(v, 'chore'), cell: du.step, spot: sl.spot }];
     const w = wanderSteps(v);
     if (w[1]) w[1].pose = 'stretch';
     return w;
@@ -935,8 +1034,10 @@ export function createSim({ save = null, readOnly = false } = {}) {
           const c = world.nav.centre(pile.x + f[0], pile.z + f[1]);
           const tx = (pile.x + 0.5) * CELL, tz = (pile.z + 0.5) * CELL;
           const ax = c[0] + (tx - c[0]) * 0.2, az = c[2] + (tz - c[2]) * 0.2;
-          sp = { cell: [pile.x + f[0], pile.z + f[1]], at: [ax, c[1], az], face: yawTo(ax, az, tx, tz) };
-        } else sp = standBy(v, pile, 'chop');
+          const key = `cell|${pile.x + f[0]}|${pile.z + f[1]}`;
+          if (placeFree(key, [ax, c[1], az], v)) sp = { cell: [pile.x + f[0], pile.z + f[1]], at: [ax, c[1], az], face: yawTo(ax, az, tx, tz), spot: key };
+        }
+        if (!sp) sp = standBy(v, pile, 'chop');
         if (sp) return gotoPose(sp, 'chop', wd(), { cues: [{ kind: 'chips', first: 1, every: 1.6, at: at(pile, 0.5) }, { kind: 'chop', first: 1, every: 1.6 }], flags: tool });
         break;
       }
@@ -1003,10 +1104,11 @@ export function createSim({ save = null, readOnly = false } = {}) {
     const r = R(v, 'potter');
     const x = r();
     if (x < 0.4) return choreSteps(v);
-    const paths = [...world.index.F.values()].filter((p) => (p.y | 0) === 0 && p.t === 'path' && world.nav.inMain(p.x, p.z));
+    const paths = [...world.index.F.values()].filter((p) => (p.y | 0) === 0 && p.t === 'path' && world.nav.inMain(p.x, p.z)
+      && placeFree(`cell|${p.x}|${p.z}`, world.nav.centre(p.x, p.z), v));
     if (paths.length && x < 0.8) {
       const p = paths[Math.floor(r() * paths.length)];
-      return [{ k: 'walk', to: [p.x, p.z] }, { k: 'pose', pose: 'admire', at: world.nav.centre(p.x, p.z), face: 0, dur: dur(v, 'admire'), cell: [p.x, p.z] }];
+      return [{ k: 'walk', to: [p.x, p.z] }, { k: 'pose', pose: 'admire', at: world.nav.centre(p.x, p.z), face: 0, dur: dur(v, 'admire'), cell: [p.x, p.z], spot: `cell|${p.x}|${p.z}` }];
     }
     return choreSteps(v);
   }
@@ -1048,8 +1150,8 @@ export function createSim({ save = null, readOnly = false } = {}) {
         cur = sp.cell;
       } else {
         const du = tg.door;
-        out.push({ k: 'walk', to: du.step, end: du.stand }, { k: 'pose', pose: kind === 'bread' ? 'knock' : 'post', at: du.stand, face: du.face, dur: 1.5, cell: du.step,
-          cues: [{ kind: kind === 'bread' ? 'bread' : 'letter', first: 0.5, every: 99, at: [du.stand[0], 1.4, du.stand[2]] }], flags: { basket: kind === 'bread', tool: kind !== 'bread' } });
+        out.push({ k: 'walk', to: du.step, end: du.stand }, doorPose(du, kind === 'bread' ? 'knock' : 'post', du.face, 1.5,
+          { cues: [{ kind: kind === 'bread' ? 'bread' : 'letter', first: 0.5, every: 99, at: [du.stand[0], 1.4, du.stand[2]] }], flags: { basket: kind === 'bread', tool: kind !== 'bread' } }));
         cur = du.step;
       }
     }
@@ -1095,7 +1197,12 @@ export function createSim({ save = null, readOnly = false } = {}) {
     const choice = weighted(R(v, 'campact'), W) || 'wander';
     v._act = choice;
     const s = choice === 'chore' ? wanderSteps(v) : activitySteps(v, choice, phase);
-    v._steps = s.length ? s : [{ k: 'walk', to: mouth }, { k: 'pose', pose: 'stand', at, face: Math.PI / 2, dur: dur(v, 'wander'), cell: mouth }];
+    if (s.length) { v._steps = s; return; }
+    // nothing to do: wait by the tent, beside a tent-mate rather than on them (two campers share a tent; R4 T4.4)
+    const k = villagers.filter((u) => u.status === 'camping').indexOf(v) % 2;
+    const by = mouth[0] === t[0] + 1 && mouth[1] === t[1] ? [(t[0] + 1) * CELL + 0.6, surfaceAt((t[0] + 1) * CELL + 0.6, (t[1] + 0.5) * CELL), (t[1] + 0.5) * CELL + (k ? 0.5 : -0.5)] : at;
+    const key = `tent|${t[0]}|${t[1]}|${k}`;
+    v._steps = [{ k: 'walk', to: mouth, end: by }, { k: 'pose', pose: 'stand', at: by, face: Math.PI / 2, dur: dur(v, 'wander'), cell: mouth, spot: placeFree(key, by, v) ? key : undefined }];
   }
   /** Steps that use a granted piece (§5.3). */
   function useSteps(v, g) {
@@ -1121,7 +1228,8 @@ export function createSim({ save = null, readOnly = false } = {}) {
       if (S.BLOOM.has(t) || S.TREE.has(t)) { const sp = standBy(v, rec, S.BLOOM.has(t) ? 'water' : 'admire'); if (sp) return gotoPose(sp, sp.pose, dur(v, 'use'), { cues: [{ kind: S.BLOOM.has(t) ? 'drops' : 'sparkle', first: 1, every: 3, at }] }); }
       if (t === 'mailbox') { const sp = standBy(v, rec, 'post'); if (sp) return gotoPose(sp, 'post', 5, { cues: [{ kind: 'letter', first: 1, every: 99, at }] }); }
       if (t === 'path' || t === 'deck' || t === 'steps') {
-        if (world.nav.inMain(rec.x, rec.z)) return [{ k: 'walk', to: [rec.x, rec.z] }, { k: 'pose', pose: 'admire', at: world.nav.centre(rec.x, rec.z), face: 0, dur: dur(v, 'admire'), cell: [rec.x, rec.z] }];
+        const at = world.nav.inMain(rec.x, rec.z) ? world.nav.centre(rec.x, rec.z) : null, key = `cell|${rec.x}|${rec.z}`;
+        if (at && placeFree(key, at, v)) return [{ k: 'walk', to: [rec.x, rec.z] }, { k: 'pose', pose: 'admire', at, face: 0, dur: dur(v, 'admire'), cell: [rec.x, rec.z], spot: key }];
         continue;
       }
       const sp = standBy(v, rec, t === 'pond' ? 'stand' : 'admire');
@@ -1379,7 +1487,7 @@ export function createSim({ save = null, readOnly = false } = {}) {
       if (sp) {
         endActivity(v);
         v._steps = [{ k: 'walk', to: sp.cell, end: sp.at, speed: TUNE.WALK_SPEED * TUNE.GRANT_RUSH },
-          { k: 'pose', pose: 'cheer', at: sp.at, face: sp.face, dur: 0.6, cell: sp.cell, cues: [{ kind: 'hop', first: 0, every: 99 }, { kind: 'hearts', first: 0.2, every: 99, at: [sp.at[0], 1.6, sp.at[2]] }] },
+          { k: 'pose', pose: 'cheer', at: sp.at, face: sp.face, dur: 0.6, cell: sp.cell, spot: sp.spot, cues: [{ kind: 'hop', first: 0, every: 99 }, { kind: 'hearts', first: 0.2, every: 99, at: [sp.at[0], 1.6, sp.at[2]] }] },
           { k: 'pose', pose: 'admire', at: sp.at, face: sp.face, dur: 3, cell: sp.cell }];
         cutPlan(v);
       }
@@ -1525,7 +1633,7 @@ export function createSim({ save = null, readOnly = false } = {}) {
     if (night || phaseOf(v, lastCtx.sky) === 'night') { if (b) v._steps = [insideStep(v, b, 'sleep', Infinity)]; return g; }
     const ex = exitSteps(v);
     const du = doorUse(b);
-    v._steps = [...ex, ...(du ? [{ k: 'pose', pose: 'wave', at: du.stand, face: du.out, dur: 1.5, cell: du.step, cues: [{ kind: 'wave', first: 0, every: 99 }] }] : []),
+    v._steps = [...ex, ...(du ? [doorPose(du, 'wave', du.out, 1.5, { cues: [{ kind: 'wave', first: 0, every: 99 }] })] : []),
       { k: 'call', fn: (u) => { if (u._steps.length === 0) u._steps = firstChoreSteps(u); } }];
     return g;
   }
@@ -1545,7 +1653,7 @@ export function createSim({ save = null, readOnly = false } = {}) {
       if (sp) return gotoPose(sp, 'water', d, { cues: [{ kind: 'drops', first: 1, every: 2, at: [(p.x + 0.5) * CELL, 0.4, (p.z + 0.5) * CELL] }], flags: { tool: v.job === 'gardener' } });
     }
     if (du.back) return [];
-    return [{ k: 'walk', to: du.step, end: du.stand }, { k: 'pose', pose: 'sweep', at: du.stand, face: du.out, dur: d, cell: du.step }];
+    return [{ k: 'walk', to: du.step, end: du.stand }, doorPose(du, 'sweep', du.out, d)];
   }
   function turnBack(v) {
     if (!v || v.status !== 'traveller') return;
@@ -2232,7 +2340,7 @@ export function createSim({ save = null, readOnly = false } = {}) {
   };
   function num0(t) { return typeof t === 'number' && Number.isFinite(t) ? t : 0; }
 
-  /** Flavour line (§2.6): same all town-day per situation; never the same twice in a row. */
+  /** Flavour line (§2.6): same all town-day per situation (a thank-you: per grant); never the same twice in a row. */
   function lineFor(v) {
     const day = Math.floor(st.clock / TUNE.DAY_SECONDS);
     const c = cozyNow();
@@ -2251,11 +2359,17 @@ export function createSim({ save = null, readOnly = false } = {}) {
       else if (r() < 0.4) { pool = LINES[v.job]; sit = v.job; }
       else { pool = LINES[v.trait]; sit = v.trait; }
     }
+    // a thank-you is keyed on the grant it is for, not only the day, and never repeats the one before it, so two wishes
+    // granted on the same town day get two different thank-yous (R3 T3.4)
+    if (sit === 'granted') sit = `granted#${v.grants | 0}`;
     const key = `${day}|${sit}`;
     if (v._lineKey === key && v._line) return v._line;
     const r = rng(hash32(st.seed, v.seed, day, sit));
     let line = pool[Math.floor(r() * pool.length)];
-    if (line === v._line && pool.length > 1) line = pool[(pool.indexOf(line) + 1) % pool.length];
+    if ((line === v._line || line === v._thanks) && pool.length > 1) {
+      for (let k = 1; k < pool.length && (line === v._line || line === v._thanks); k++) line = pool[(pool.indexOf(line) + 1) % pool.length];
+    }
+    if (pool === LINES.granted || pool === LINES.grantedShy) v._thanks = line;
     const others = villagers.filter((u) => u !== v);
     line = line.replace('{neighbour}', others.length ? others[Math.floor(r() * others.length)].name : LINES.neighbourNone);
     v._line = line; v._lineKey = key;

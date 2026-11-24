@@ -14,10 +14,12 @@ const BUBBLE_MAX = 6;          // tappable bubbles shown at once
 const SLEEP_MAX = 3;           // 💤 bubbles shown at once
 const MERGE_PX = 36;           // bubbles closer than this merge into one "×n"
 const CULL_M = 45;             // hidden beyond this camera distance (m)
+const WISH_REACH_M = 30;       // wish and dream edge arrows: within the rig's furthest pull-back + this (≈ the lot's half-diagonal)
 const NEAR_M = 20, FAR_M = 40; // scale 1.0 at ≤ 20 m down to 0.8 at 40 m
 const SLEEP_M = 25;            // 💤 only when the camera target is this close (m)
 const DRAG_PX = 10;            // a press on a bubble that moves further is handed to the canvas
 const EDGE_PX = 50;            // edge bubbles sit this far inside the free area (circle + arrow fit)
+const EDGE_REACH = 38;         // px from an edge bubble's centre to its arrow's tip (--arrow-r 28 + half the arrow)
 const OCC_EVERY = 0.25;        // s between occlusion rays per bubble
 const OCC_RAYS = 2;            // occlusion rays per frame at most
 const VIEW_EVERY = 0.25;       // s between view() reads (hearth, open cards)
@@ -419,9 +421,13 @@ export function createHud(app, { root, topLeft, toast, ask } = {}) {
         taps.push(item);
         continue;
       }
-      // wishes and dreams never vanish off an edge or under the bars: off-screen (but in front and within the cull
-      // range) they ride the free area's edge with an arrow, like a traveller; near an edge they are kept inside it
-      if ((b.kind === 'wish' || b.kind === 'dream') && !P.behind && dist <= CULL_M) {
+      // wishes and dreams never vanish off an edge or under the bars: off-screen (but in front and within their cull
+      // range) they ride the free area's edge with an arrow, like a traveller; near an edge they are kept inside it.
+      // On screen they are never culled by distance, whatever the framing (the 0.8 minimum scale): a tall portrait
+      // phone frames the stamped farmhouse from up to 55 m and the rig pulls back to 80 m, so the lot's far corner can
+      // be 110 m away with the villager plainly in view (R3 T3.2, R4 T4.2). Off screen, the arrow's range follows the
+      // rig: its furthest pull-back plus the lot's reach
+      if ((b.kind === 'wish' || b.kind === 'dream') && !P.behind && (inFree || dist <= (app.rig?.maxRadius || 80) + WISH_REACH_M)) {
         if (!inFree) item.edge = edgePoint(P, fl, ft, fr, fb);
         else keepIn(item, dist, fl, ft, fr);
         taps.push(item);
@@ -451,11 +457,18 @@ export function createHud(app, { root, topLeft, toast, ask } = {}) {
     for (const z of sleeps) if (shown.some((s) => !s.edge && Math.abs(s.x - z.x) < 30 && Math.abs(s.y - z.y) < 30)) z.x += 34;
     // no tappable bubble sits under a toast (T2.2): the one-time camp tip used to cover the very bubble it was about
     // for its 4.6 s. A bubble whose box (38 × 46 px × scale, tail tip on the anchor) overlaps a toast moves just below
-    // the stack while it is up, as the nameplate does; the bars' clamp (keepIn) still holds
-    const band = shown.some((it) => !it.edge && it.y - 46 < fb * 0.6) ? toastBand(cv) : null;
+    // the stack while it is up, as the nameplate does; the bars' clamp (keepIn) still holds. The Show me checklist
+    // chip sits in the same stack, under the toasts, for the whole Show me: the band covers it too (R3 T3.6). An edge
+    // bubble (an off-screen wisher, often the one Show me has just turned the camera away from) dodges too: it rides
+    // the edge of the free area below the band instead of the bars' edge while the band is up (R4 T4.1)
+    const band = shown.some((it) => (it.edge ? edgeBox(it.edge).t : it.y - 46) < fb * 0.6) ? toastBand(cv) : null;
     if (band) {
       for (const it of shown) {
-        if (it.edge) continue;
+        if (it.edge) {
+          const e = edgeBox(it.edge), ft2 = band.bottom + 4 + EDGE_REACH - EDGE_PX;
+          if (e.t < band.bottom && e.b > band.top && e.r > band.left && e.l < band.right && ft2 > ft && fb - ft2 > 3 * EDGE_PX) it.edge = edgePoint(it, fl, ft2, fr, fb);
+          continue;
+        }
         const s = scaleAt(it.dist), half = 19 * s, top = it.y - 46 * s;
         if (top < band.bottom && it.y > band.top && it.x + half > band.left && it.x - half < band.right) it.y = Math.min(fb, band.bottom + 46 * s + 4);
       }
@@ -481,17 +494,24 @@ export function createHud(app, { root, topLeft, toast, ask } = {}) {
       if (!vis.has(key) && r.shown) { r.shown = false; r.el.classList.add('is-hid'); r.tf = ''; }
     }
   }
-  /** The toast stack's box in canvas px (null when no toast is up). Its layout box, not the toasts' own: their in / out
+  /** The top stack's busy box in canvas px: the toast stack while a toast is up, joined with the Show me checklist chip
+   *  while it shows (R3 T3.6); null when neither is up. The stack's layout box, not the toasts' own: their in / out
    *  springs never move it, so a bubble below it holds still. Read only while a bubble is high enough to meet it, and
    *  before this frame's transform writes, so it forces no extra layout. */
   let toastsEl = null;
   function toastBand(cv) {
     if (!toastsEl || !toastsEl.isConnected) toastsEl = root.querySelector('.hw-toasts');
-    if (!toastsEl || !toastsEl.childElementCount) return null;
-    const q = toastsEl.getBoundingClientRect();
-    if (q.width <= 0 || q.height <= 0) return null;
+    let box = null;
+    const join = (q) => {
+      if (!q || q.width <= 0 || q.height <= 0) return;
+      box = box ? { left: Math.min(box.left, q.left), top: Math.min(box.top, q.top), right: Math.max(box.right, q.right), bottom: Math.max(box.bottom, q.bottom) }
+        : { left: q.left, top: q.top, right: q.right, bottom: q.bottom };
+    };
+    if (toastsEl && toastsEl.childElementCount) join(toastsEl.getBoundingClientRect());
+    if (!check.hidden && check.isConnected) join(check.getBoundingClientRect());
+    if (!box) return null;
     const c = cv.getBoundingClientRect();
-    return { left: q.left - c.left, top: q.top - c.top, right: q.right - c.left, bottom: q.bottom - c.top };
+    return { left: box.left - c.left, top: box.top - c.top, right: box.right - c.left, bottom: box.bottom - c.top };
   }
   const scaleAt = (d) => (d <= NEAR_M ? 1 : d >= FAR_M ? 0.8 : 1 - 0.2 * ((d - NEAR_M) / (FAR_M - NEAR_M)));
   /** An on-screen tappable bubble is kept EDGE_IN px (× scale) inside the free area's sides and 50 px below its top,
@@ -511,7 +531,14 @@ export function createHud(app, { root, topLeft, toast, ask } = {}) {
     return now - seenAt.get(b.key) >= TIP_SETTLE;
   }
 
-  /** Where an off-screen target's arrow sits: on the free area's edge (inset), toward the target. */
+  /** An edge bubble's box in canvas px: its 48 px hit circle joined with its arrow (20 px, centred --arrow-r 28 px out
+   *  toward the target), so the whole of it can be kept clear of the toast / checklist band (R4 T4.1). */
+  function edgeBox(e) {
+    const ax = e.x + Math.cos(e.a) * 28, ay = e.y + Math.sin(e.a) * 28;
+    return { l: Math.min(e.x - 24, ax - 10), t: Math.min(e.y - 24, ay - 10), r: Math.max(e.x + 24, ax + 10), b: Math.max(e.y + 24, ay + 10) };
+  }
+  /** Where an off-screen target's arrow sits: on the free area's edge (inset), toward the target. `p` is the target's
+   *  projection (x, y, behind, cx, cy: a layout item carries them too). */
   function edgePoint(p, fl, ft, fr, fb) {
     const cx = (fl + fr) / 2, cy = (ft + fb) / 2;
     let dx, dy;

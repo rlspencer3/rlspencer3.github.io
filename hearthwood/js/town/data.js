@@ -314,7 +314,7 @@ export const LINES = {
     "Look at that door! I think we'll get along, this house and me.", "Home at last. I'll put the kettle on."],
   granted: ["It's perfect. Thank you!", 'Oh! You remembered!', "I'll think of you every time I see it.",
     'Just what I was dreaming of.', 'My heart is as full as a teapot.', 'Look at that! I could hug it.'],
-  grantedShy: ["Thank you… it's just right."],
+  grantedShy: ["Thank you… it's just right.", 'Oh… for me? Thank you.'],
   waiting: ["A little fixing up and it'll be good as new.", "I don't mind the draught. It's an adventure!",
     "I'll sleep on the sofa until it's mended."],
   camping: ['Sleeping under the stars is an adventure! Though a roof would be nice.',
