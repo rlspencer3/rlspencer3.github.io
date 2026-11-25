@@ -387,7 +387,7 @@ export function createHud(app, { root, topLeft, toast, ask } = {}) {
   let occRays = 0;
   const P = { x: 0, y: 0, W: 1, H: 1, behind: false, cx: 0, cy: 0 };
   const seenKinds = new Set();         // kinds that were on screen this session (tips)
-  const fanSide = new Map();           // bubble key → the side (+1 / −1 along its edge) it fanned to last frame
+  const sideMem = new Map();           // bubble key → the side (+1 / −1) it moved to beside / fanned to last frame
   let railR = null, railAt = -1;       // the rail's button groups in canvas px (cached ½ s)
   function layoutBubbles(t) {
     const list = call(() => t.bubbles(), []);
@@ -452,23 +452,31 @@ export function createHud(app, { root, topLeft, toast, ask } = {}) {
     // on one point, one hiding the other with no ×2. Edge bubbles of different kinds never merge (a traveller up the
     // lane would swallow an off-screen wisher the same way, and a tap only follows the traveller): they fan apart below
     taps.sort((a, c) => (ORDER[a.b.kind] ?? 9) - (ORDER[c.b.kind] ?? 9) || a.dist - c.dist);
-    const shown = [];
+    const shown = [], sided = new Set();
+    const midX = (fl + fr) / 2;
     for (const it of taps) {
       if (shown.length >= BUBBLE_MAX) break;
+      const key = it.b.key, was = sideMem.get(key) || 0;
+      // on screen, a different kind on one point (a wish and a dream under one roof: two housemates) sits 40 px beside
+      // it rather than merging, so both cards can be opened. Like the edge fan below: measured from the bubble in the
+      // way, on the side it leans to (equal points: toward the middle, as the fan does, so the pair keeps its order as
+      // its roof crosses the free area's edge), then remembered, and only let go once 8 px clearer than needed, so it
+      // never flips across a bubble passing by. When neither side is free it merges (×N)
       const near = it.edge ? shown.find((s) => s.edge && s.b.kind === it.b.kind && Math.hypot(s.edge.x - it.edge.x, s.edge.y - it.edge.y) < EDGE_MERGE_PX)
-        : shown.find((s) => !s.edge && Math.hypot(s.x - it.x, s.y - it.y) < MERGE_PX);
-      // on screen, a different kind on one point (a wish and a dream under one roof: two housemates) sits beside it
-      // rather than merging, so both cards can be opened; only when neither side is free does it merge (×N)
+        : shown.find((s) => !s.edge && Math.hypot(s.x - it.x, s.y - it.y) < (s.b.kind !== it.b.kind && was ? MERGE_PX + 8 : MERGE_PX));
       if (near && !it.edge && near.b.kind !== it.b.kind) {
-        const x = [40, -40].map((dx) => it.x + dx).find((x2) => x2 >= fl + EDGE_IN && x2 <= fr - EDGE_IN && !shown.some((s2) => !s2.edge && Math.hypot(s2.x - x2, s2.y - it.y) < MERGE_PX));
-        if (x !== undefined) { it.x = x; shown.push(it); continue; }
+        const lean = was || Math.sign(it.x - near.x) || (midX >= near.x ? 1 : -1);
+        let x = null;
+        for (const d of [lean, -lean]) {
+          const x2 = near.x + d * 40;
+          if (x2 >= fl + EDGE_IN && x2 <= fr - EDGE_IN && !shown.some((s2) => !s2.edge && Math.hypot(s2.x - x2, s2.y - it.y) < MERGE_PX)) { x = x2; sideMem.set(key, d); sided.add(key); break; }
+        }
+        if (x !== null) { it.x = x; shown.push(it); continue; }
       }
       if (near) { near.count++; continue; }
       shown.push(it);
     }
     sleeps.sort((a, c) => a.dist - c.dist);
-    // a 💤 that shares its roof anchor with a wish / dream / hint bubble moves aside so the two don't stack
-    for (const z of sleeps) if (shown.some((s) => !s.edge && Math.abs(s.x - z.x) < 30 && Math.abs(s.y - z.y) < 30)) z.x += 34;
     // no tappable bubble sits under a toast (T2.2): the one-time camp tip used to cover the very bubble it was about
     // for its 4.6 s. A bubble whose box (38 × 46 px × scale, tail tip on the anchor) overlaps a toast moves just below
     // the stack while it is up, as the nameplate does; the bars' clamp (keepIn) still holds. The Show me checklist
@@ -490,7 +498,7 @@ export function createHud(app, { root, topLeft, toast, ask } = {}) {
     // Edge bubbles of different kinds at one point fan along their edge (R7 T7.2, R8). The new place is measured from
     // the bubble in the way: a circle plus whatever part of either arrow reaches along the edge (landscape's top and
     // bottom edges carry near-level arrows), so a neighbour's arrow never lands on the other's disc or badge. The side
-    // is the one the bubble already leans to, then remembered (fanSide) while that place stays free, and a fanned
+    // is the one the bubble already leans to, then remembered (sideMem) while that place stays free, and a fanned
     // bubble only un-fans once 8 px clearer than it needed: it never flips across its neighbour frame to frame. A place
     // never meets the toast / checklist band or the rail's buttons (a short phone wraps the rail into a second column
     // inside the free area); when no place is free it merges into the bubble in the way (×N), as before. An edge
@@ -512,7 +520,7 @@ export function createHud(app, { root, topLeft, toast, ask } = {}) {
       const reach = (e, ax) => 28 * Math.abs(ax === 'y' ? Math.sin(e.a) : Math.cos(e.a));
       const gap = (e, q) => EDGE_MERGE_PX + Math.max(reach(e, axis(e)), reach(q, axis(e)));
       const lo = (ax) => (ax === 'y' ? ft + EDGE_PX : fl + EDGE_PX), hi = (ax) => (ax === 'y' ? fb - EDGE_PX : fr - EDGE_PX);
-      const placed = [], fanned = new Set();
+      const placed = [];
       const nearOf = (e, extra) => placed.find((p) => Math.hypot(p.e.x - e.x, p.e.y - e.y) < gap(e, p.e) + extra);
       // a place on a side edge that meets the rail's buttons may instead sit just inside them (its arrow still
       // points out at its target): on a short phone the wrapped rail column covers most of the right edge
@@ -523,13 +531,20 @@ export function createHud(app, { root, topLeft, toast, ask } = {}) {
         const x = e.side === 'r' ? R.left - 39 : R.right + 39;
         return x >= fl + EDGE_PX && x <= fr - EDGE_PX ? { ...e, x } : null;
       };
-      const ok = (c) => !!c && !nearOf(c, -1) && !blocked(c);        // −1: exactly one gap away is clear
+      // arrow (20 px, centred 28 px out) and disc (38 px) boxes: a place is clear only if neither its arrow meets a
+      // placed bubble's disc nor a placed arrow meets its disc (a bubble set inward of the rail points its arrow out,
+      // across the edge, at whatever sits on the edge beside it)
+      const arrowB = (e) => { const x = e.x + Math.cos(e.a) * 28, y = e.y + Math.sin(e.a) * 28; return { l: x - 13, t: y - 13, r: x + 13, b: y + 13 }; };   // a rotated 20 px arrow spans ≤ 28 px
+      const discB = (e) => ({ l: e.x - 20, t: e.y - 20, r: e.x + 20, b: e.y + 20 });
+      const ov = (A, B2) => A.l < B2.r && A.r > B2.l && A.t < B2.b && A.b > B2.t;
+      const arrowsClear = (c) => placed.every((p) => !ov(arrowB(c), discB(p.e)) && !ov(arrowB(p.e), discB(c)));
+      const ok = (c) => !!c && !nearOf(c, -1) && arrowsClear(c) && !blocked(c);   // −1: exactly one gap away is clear
       const tryAt = (c) => (ok(c) ? c : ((c2) => (ok(c2) ? c2 : null))(inward(c)));
       for (const it of shown) {
         if (!it.edge) continue;
-        const key = it.b.key, was = fanSide.get(key) || 0, e0 = it.edge, ax = axis(e0);
+        const key = it.b.key, was = sideMem.get(key) || 0, e0 = it.edge, ax = axis(e0);
         let e = e0;
-        const blk = nearOf(e0, was ? 8 : 0);
+        const blk = nearOf(e0, was ? 8 : 0) || placed.find((p) => ov(arrowB(e0), discB(p.e)) || ov(arrowB(p.e), discB(e0)));
         if (blk) {
           const base = blk.e[ax], own = e0[ax], mid = ax === 'y' ? (ft + fb) / 2 : (fl + fr) / 2;
           const lean = was || (own > base ? 1 : own < base ? -1 : mid >= base ? 1 : -1);
@@ -539,7 +554,7 @@ export function createHud(app, { root, topLeft, toast, ask } = {}) {
             const v = base + d * m * g;
             if (v < lo(ax) - 0.5 || v > hi(ax) + 0.5) continue;      // never clamped back onto the neighbour
             const c = tryAt({ ...e0, [ax]: v });
-            if (c) { found = c; fanSide.set(key, d); fanned.add(key); break; }
+            if (c) { found = c; sideMem.set(key, d); sided.add(key); break; }
           }
           if (!found) { blk.it.count += it.count; it.drop = true; continue; }   // nowhere free: one ×N, as before
           e = found;
@@ -557,8 +572,22 @@ export function createHud(app, { root, topLeft, toast, ask } = {}) {
         it.edge = e;
         placed.push({ e, it });
       }
-      for (const k of [...fanSide.keys()]) if (!fanned.has(k)) fanSide.delete(k);
+      for (const k of [...sideMem.keys()]) if (!sided.has(k)) sideMem.delete(k);
       for (let k = shown.length - 1; k >= 0; k--) if (shown[k].drop) shown.splice(k, 1);
+    }
+    // a 💤 that shares its roof anchor with a shown bubble moves aside to the first free place: either side, then past
+    // a bubble set beside it, checked against every shown bubble where it is finally drawn (after the band dodge) and
+    // the 💤s already placed, so it never lands on a bubble moved 40 px beside a housemate's
+    {
+      const zs = [];
+      const clash = (x, y) => shown.some((q) => !q.edge && Math.abs(q.x - x) < 30 && Math.abs(q.y - y) < 30) || zs.some((q) => Math.abs(q.x - x) < 26 && Math.abs(q.y - y) < 26);
+      for (const z of sleeps.slice(0, SLEEP_MAX)) {
+        if (clash(z.x, z.y)) {
+          const x0 = z.x, dx = [34, -34, 74, -74, 114, -114].find((d) => !clash(x0 + d, z.y));
+          z.x = x0 + (dx ?? 34);
+        }
+        zs.push(z);
+      }
     }
     // the move-in nameplate never sits behind the toast stack: below it when the roof anchor is in the toast band
     if (quiet.some((q) => q.b.kind === 'nameplate')) {

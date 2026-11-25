@@ -5,7 +5,7 @@
 //   --only=a,b   run only these sections (params, spine, off, settings, crash, importfail, autosave, parts, offline,
 //                blueprints, homes, arrival, evict, stuck, budget, determinism, passerby, showme, gifts, share, photo,
 //                villageoff, guided, persist, taps, migration, twotabs, watch, repair1, repair2, repair3, repair4, repair5,
-//                repair6, repair7, repair8, feel)
+//                repair6, repair7, repair8, repair9, feel)
 // M0: the spine — boot / ready / restore recompute (R1), the TownAPI and debug shape, params, enabled(), clocks,
 // recompute scheduling, rig pass-through, failure isolation, an import failure (R5's last case), the core edits
 // (state keys, env exports, catalog.setHidden, the autosave guard) and R13.
@@ -31,6 +31,9 @@
 // arrow) and `repair8` (T8.x, the round-7 review: a waiting sleeper keeps their bed and gets it back, a new bed in a
 // full home takes nobody's; edge bubbles never flip sides, never sit on the wrapped rail of a short phone, never under
 // a neighbour's arrow in landscape; a wish and a dream on one point side by side; a merged dreams' count readable);
+// and `repair9` (T9.x, the round-8 re-check: a waiting sleeper whose bed is upstairs in a roofless farmhouse sleeps in
+// the building they wait in and is never walked out by edits; a 💤 never on a bubble set beside; a bubble beside
+// another never jumps across it, nor as its roof crosses the edge; on a 320×568 phone no arrow over a disc);
 // R11 also shows every feasible wish with Show me (the ghost is one mesh,
 // T2.4), and judges its wall-clock budgets on the fastest of several batches (T2.5, T3.7).
 import { spawnSync } from 'node:child_process';
@@ -3156,6 +3159,145 @@ await section('repair8', async () => {
     await ctx.close();
   }
   check('T8.x', 'no console errors (repair8)', allProblems.length === 0, allProblems.slice(0, 4));
+});
+
+// ---------------------------------------------------------------- repair9: the round-8 re-check (waiting sleepers, 💤, sides)
+await section('repair9', async () => {
+  const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+  const allProblems = [];
+  // synthetic bubbles on chosen screen points (town.bubbles replaced in the page) and what the hud drew
+  const SYN9 = String.raw`window.__s9 = {
+    install() { const t = __hw.town; window.__s9b = []; t.bubbles = () => window.__s9b; },
+    at(sx, sy, d = 25) { const hw = __hw, cam = hw.camera, cv = hw.renderer.domElement; const v = new hw.THREE.Vector3((sx / cv.clientWidth) * 2 - 1, 1 - (sy / cv.clientHeight) * 2, 0.5).unproject(cam); const dir = v.sub(cam.position).normalize(); const p = cam.position.clone().addScaledVector(dir, d); return [p.x, p.y, p.z]; },
+    set(list) { window.__s9b = list.map((s) => ({ tappable: s.kind !== 'sleep', arrow: s.kind === 'traveller', villager: s.v || s.key, label: s.key, icon: { traveller: '🎒', wish: '💡', dream: '🪴', vacancy: '🏡✨', sleep: '💤' }[s.kind], ...s, at: s.at || this.at(s.sx, s.sy) })); },
+    frames(n = 3) { return new Promise((r) => { const f = () => (--n <= 0 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); }); },
+    drawn() { return [...document.querySelectorAll('.hw-bubble')].filter((b) => !b.classList.contains('is-hid') && b.getBoundingClientRect().width > 0).map((b) => {
+      const r = (e) => { const q = e.getBoundingClientRect(); return [q.left, q.top, q.right, q.bottom]; };
+      const c = b.querySelector('.hw-bubble-c'), edge = b.classList.contains('is-edge');
+      return { kind: [...b.classList].find((k) => k.startsWith('k-')), edge, merged: b.classList.contains('is-merged'), disc: r(c), x: (r(c)[0] + r(c)[2]) / 2, arrow: edge ? r(b.querySelector('.hw-bubble-arrow')) : null };
+    }); },
+  };`;
+  const area = (A, B) => (A && B ? Math.max(0, Math.min(A[2], B[2]) - Math.max(A[0], B[0])) * Math.max(0, Math.min(A[3], B[3]) - Math.max(A[1], B[1])) : 0);
+
+  // -- T9.1: the farmhouse, a sleeper upstairs, every roof panel lifted (the upstairs room becomes a shell, not part of
+  // the building they now wait in): they sleep inside that building, and four unrelated edits elsewhere never walk
+  // them out (on the code before, each edit put them out of the door and they walked back up to their bed)
+  {
+    const { ctx, page, problems } = await game('bp=farmhouse&nosave=1&town=fresh&townseed=10', {});
+    const r = await page.evaluate(async () => {
+      const hw = __hw, D = hw.town.debug, S = D.sim;
+      hw.state.set({ timeFlow: false });
+      D.spawn('gardener', { trait: 'homebody' });
+      D.phase('night'); D.step(2); S.reseat(); D.step(2);
+      await __t.sleep(800);
+      const v = S.villagers[0];
+      const snap = () => [v.status, v._loc, v.plan.kind, v.plan.pose || '', v._spot].join(' ');
+      const out = { asleep: snap() };
+      const roofs = [...hw.world.entries.values()].filter((e) => e.p.t === 'roof_slope').map((e) => e.key);
+      await D.edit((w) => { for (const k of roofs) w.remove(k); });
+      D.advance(46); out.settled = snap();
+      out.edits = [];
+      for (let k = 0; k < 4; k++) { await D.edit((w) => w.add({ t: 'bush', x: 6 + k, y: 0, z: 7, r: 0 })); out.edits.push(snap()); D.advance(20); out.edits.push(snap()); }
+      return out;
+    });
+    check('T9.1', 'a farmhouse sleeper upstairs, every roof panel lifted: waiting, asleep inside the building they wait in, and four unrelated edits never walk them out',
+      /^waiting in inside sleep/.test(r.settled) && r.edits.every((x) => x === r.settled), r);
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+
+  // -- T9.2..T9.4, iPhone 13, synthetic bubbles
+  {
+    const { ctx, page, problems } = await game('bp=cottage&nosave=1&town=fresh&townseed=3', { mobile: true });
+    await page.addScriptTag({ content: SYN9 });
+    await page.evaluate(() => __s9.install());
+    // T9.2: a wish, a dream, a vacancy and a 💤 on one roof point: four bubbles, no disc over another (on the code
+    // before, the 💤 was nudged a fixed 34 px, onto the bubble set 40 px beside)
+    const z = await page.evaluate(async () => { const a = __s9.at(180, 300); __s9.set([{ key: 'w9', kind: 'wish', at: a }, { key: 'd9', kind: 'dream', at: a }, { key: 'v9', kind: 'vacancy', at: a }, { key: 'z9', kind: 'sleep', at: a }]); await __s9.frames(4); return __s9.drawn(); });
+    const zbad = [];
+    for (let i = 0; i < z.length; i++) for (let j = i + 1; j < z.length; j++) if (area(z[i].disc, z[j].disc) > 0) zbad.push([z[i].kind, z[j].kind]);
+    check('T9.2', 'a wish, a dream, a vacancy and a 💤 on one roof point: all four drawn, no bubble over another', z.length === 4 && zbad.length === 0, { z: z.map((b) => [b.kind, Math.round(b.x)]), zbad });
+    // T9.3: a wish passing a dream's roof point in 4 px steps: the dream sits beside it and never jumps across it (on the
+    // code before, +40, then −40, then back)
+    const pass = await page.evaluate(async () => {
+      const d = __s9.at(180, 320), out = [];
+      for (let dx = -48; dx <= 48; dx += 4) {
+        __s9.set([{ key: 'pw', kind: 'wish', at: __s9.at(180 + dx, 320) }, { key: 'pd', kind: 'dream', at: d }]);
+        await __s9.frames(3);
+        const b = __s9.drawn(), w = b.find((q) => q.kind === 'k-wish'), dr = b.find((q) => q.kind === 'k-dream');
+        out.push(w && dr ? Math.sign(dr.x - w.x) : 0);
+      }
+      return out;
+    });
+    let pf = 0; for (let i = 1; i < pass.length; i++) if (pass[i] !== pass[i - 1]) pf++;
+    // and a vacancy hint whose anchor hovers 3-6 px beside a wish's (the reviewer's case: it hopped 81 px each time)
+    const hover = await page.evaluate(async () => {
+      const w = __s9.at(180, 420), out = [];
+      for (let i = 0; i < 24; i++) {
+        const dx = [-3, -4, -5, -6, -5, -4][i % 6];
+        __s9.set([{ key: 'hw', kind: 'wish', at: w }, { key: 'hv', kind: 'vacancy', at: __s9.at(180 + dx, 420) }]);
+        await __s9.frames(3);
+        const b = __s9.drawn(), a = b.find((q) => q.kind === 'k-wish'), v = b.find((q) => q.kind === 'k-vacancy');
+        out.push(a && v ? Math.sign(v.x - a.x) : 0);
+      }
+      return out;
+    });
+    let hf = 0; for (let i = 1; i < hover.length; i++) if (hover[i] !== hover[i - 1]) hf++;
+    check('T9.3', 'a wish passing a dream\'s roof point (4 px steps): two bubbles throughout, the dream stays on one side while beside it and changes side at most once (going home once the wish is past); a vacancy hovering 3-6 px beside a wish never hops across it',
+      pf <= 1 && pass.every((x) => x !== 0) && hf === 0 && hover.every((x) => x !== 0), { pass: pass.join(''), hover: hover.join('') });
+    // T9.4: a wish and a dream on one point, carried from on screen up across the top edge and back, at three x: the
+    // pair keeps its order (on the code before, it swapped as the roof crossed the edge)
+    const cross = await page.evaluate(async () => {
+      const I = __hw.rig.insets, res = {};
+      for (const X of [80, 195, 300]) {
+        const seq = [];
+        for (const k of [...Array(61).keys(), ...[...Array(60).keys()].reverse()]) {
+          const a = __s9.at(X, I.top + 120 - k * 4);
+          __s9.set([{ key: 'cw' + X, kind: 'wish', at: a, v: 'v1' }, { key: 'cd' + X, kind: 'dream', at: a, v: 'v2' }]);
+          await __s9.frames(3);
+          const b = __s9.drawn(), w = b.find((q) => q.kind === 'k-wish'), d = b.find((q) => q.kind === 'k-dream');
+          seq.push(w && d ? Math.sign(d.x - w.x) : 0);
+        }
+        let f = 0; for (let i = 1; i < seq.length; i++) if (seq[i] !== seq[i - 1]) f++;
+        res[X] = { flips: f, zeros: seq.filter((x) => x === 0).length };
+      }
+      return res;
+    });
+    check('T9.4', 'a wish and a dream on one roof point carried across the top edge and back (x 80 / 195 / 300): the pair never swaps sides',
+      Object.values(cross).every((c) => c.flips === 0 && c.zeros === 0), cross);
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+
+  // -- T9.5, 320×568: a traveller and a wish on the right edge across 120 pairs of places (the wrapped rail column puts
+  // bubbles inward of it): no arrow ever over another bubble's disc (on the code before, an inward bubble's arrow
+  // pointed into its neighbour)
+  {
+    const SE = { viewport: { width: 320, height: 568 }, screen: { width: 320, height: 568 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 };
+    const { ctx, page, problems } = await game('bp=cottage&nosave=1&town=fresh&townseed=3', { device: SE });
+    await page.addScriptTag({ content: SYN9 });
+    const r = await page.evaluate(async () => {
+      __s9.install();
+      const hw = __hw, cv = hw.renderer.domElement, I = hw.rig.insets;
+      const fl = I.left, ft = I.top, fr = cv.clientWidth - I.right, fb = cv.clientHeight - I.bottom, cx = (fl + fr) / 2, cy = (ft + fb) / 2, hw2 = (fr - fl) / 2 - 50;
+      const SX = 900, k = hw2 / (SX - cx), syFor = (Y) => cy + (Y - cy) / k;
+      const ov = (A, B) => Math.max(0, Math.min(A[2], B[2]) - Math.max(A[0], B[0])) * Math.max(0, Math.min(A[3], B[3]) - Math.max(A[1], B[1]));
+      const bad = [];
+      let n = 0;
+      for (let Yt = 150; Yt <= 300; Yt += 15) for (let Yw = 110; Yw <= 300; Yw += 18) {
+        n++;
+        __s9.set([{ key: 't5:' + n, kind: 'traveller', at: __s9.at(SX, syFor(Yt)) }, { key: 'w5:' + n, kind: 'wish', at: __s9.at(SX, syFor(Yw)) }]);
+        await __s9.frames(3);
+        const d = __s9.drawn().filter((b) => b.edge);
+        for (const a of d) for (const b of d) if (a !== b && ov(a.arrow, b.disc) > 0) bad.push([Yt, Yw, a.kind, b.kind]);
+      }
+      return { n, bad };
+    });
+    check('T9.5', `a 320×568 phone: a traveller and a wish at ${r.n} pairs of right-edge places: no arrow over another bubble's disc`, r.n >= 100 && r.bad.length === 0, r);
+    allProblems.push(...problems);
+    await ctx.close();
+  }
+  check('T9.x', 'no console errors (repair9)', allProblems.length === 0, allProblems.slice(0, 4));
 });
 
 // ---------------------------------------------------------------- the feel check's must-fixes (M2): asleep the right way round

@@ -493,7 +493,8 @@ resident and waiting villager is re-bound, in arrival order:
    overlap / min(|old|, |new|)) → keep it. That foot is refreshed and moved to the front.
 2. Else a **Home** overlapping a stored foot (most recent first) by ≥ 0.3 has a free bed → take it silently.
 3. Else a **building** (not a Home) overlapping the most recent foot by ≥ 0.3 exists → status **`waiting`**: they stay.
-   They sleep inside on a sofa, armchair or rug spot (else "a bedroll by the hearth" at the building's centre cell). No
+   They sleep in their own bed when it is inside that building (R8), else on a sofa, armchair or rug spot (else "a
+   bedroll by the hearth" at the building's centre cell). No
    new arrivals go there, and they make no new wishes (the fix-up is their wish). After `FIXUP_DELAY` (60 s of town
    clock) a 🔨 bubble shows above its roof. When it qualifies again they are home again, with no second move-in.
 4. Else **moving day**: the Home with a free bed whose recipe fits them best (fit, then distance), else any Home with
@@ -830,8 +831,9 @@ their heads to each other and take the `chat` pose's gestures and bounces; passi
   either side); else standing on the free floor: the FOOT cells nearest its middle that hold **no bed or other
   furniture** (an I-slot piece; a rug is fine), five stands a cell (the middle, then 0.6 m to each side, facing the
   middle); when every floor cell is furnished, sitting on the side of one's own bed.
-* `waiting` villagers sleep on a sofa (lying along it, centred), armchair or rug spot, else lie on the free floor
-  ("a bedroll by the hearth": the middle of a free cell, then 0.6 m to either side).
+* `waiting` villagers sleep in their own bed when it is inside the building they wait in (R8; a bed upstairs in a
+  roofless house's shell is not), else on a sofa (lying along it, centred), armchair or rug spot, else on the free
+  floor ("a bedroll by the hearth": the middle of a free cell, then 0.6 m to either side).
 * **Every indoor pose holds its place** (§6.5; R5 T5.1): a seat, a stand by a piece, a floor stand or bedroll, the bed.
   "First free" means free for this villager: no housemate holds it or a body near it. The place is booked when the plan
   is made if it is the plan's first (housemates going home in the same second each see the other's), and again as the
@@ -839,7 +841,7 @@ their heads to each other and take the `chat` pose's gestures and bounces; passi
   resident always sleeps in their own bed (beds are never shared), and only in a real bed: a piece the player put in the
   bed's cell in one edit (a tap of a table on the bed replaces it) is not taken for the bed, so the sleeper is booked
   again at once on a sofa, rug or bedroll (R7 T7.1). A villager waiting for their home to be put right (a roof panel
-  off) keeps sleeping in their own bed: it is still theirs (R8). When the binding gives a sleeper a different bed (or
+  off) keeps sleeping in their own bed when it is inside the building they wait in: it is still theirs (R8). When the binding gives a sleeper a different bed (or
   takes theirs), or they turn resident ↔ waiting in the same home, commit books them again at once, into their bed
   when there is one. A home with more beds than its capacity keeps the beds its residents already sleep in usable
   first, so adding a bed to a full home never takes one away from anyone (R8). Only when nothing at all is free does a villager
@@ -1387,9 +1389,14 @@ Strings never use pronouns (§2.4).
   than needed, so a bubble never flips across a neighbour frame to frame. A place never meets the toast / checklist
   band or the rail's buttons (a short phone wraps the rail into a second column inside the free area): a place on a
   side edge that meets the rail sits just inside it instead, and an edge bubble whose own place is under the rail or
-  the band slides along its edge to the nearest free place. When nowhere is free it merges (×N) as before. On screen,
-  a different kind on one point (a wish and a dream under one roof) sits 40 px beside it rather than merging, so both
-  cards can be opened; two dreams merged show their count on a lilac pill.
+  the band slides along its edge to the nearest free place, and a place is clear only if no arrow meets another
+  bubble's disc. When nowhere is free it merges (×N) as before. On screen, a different kind on one point (a wish and
+  a dream under one roof) sits 40 px beside it rather than merging, so both cards can be opened: measured from the
+  bubble in the way, on the side it leans to (equal points: toward the middle, as the edge fan does, so the pair keeps
+  its order as its roof crosses the free area's edge), remembered with the fan's side and let go only once 8 px
+  clearer than needed, so it never flips across a bubble passing by. Two dreams merged show their count on a lilac
+  pill. A 💤 sharing a roof point moves to the first free place beside it (either side, then past a bubble set
+  beside), checked where every bubble is finally drawn.
 * **Wish and dream bubbles never vanish off an edge** (M2 feel check): off-screen (in front of the camera, within
   `rig.maxRadius` + 30 m) they ride the free area's edge with an arrow, as a traveller's does; on screen they are kept at least
   24 px (× scale) inside its sides and 50 px below its top. The same keep-inside clamp holds for every other tappable
@@ -2555,6 +2562,7 @@ build them with `world.add(…, { record: false })` after `world.clear`):
 | R6 (`repair6`) | Round-6 repairs (T6.x), on an iPhone 13: the cottage with a second bed, the Gardener and the Baker through a flowing evening (seed 10): the housemate in a dining chair a quarter turn from the table is posed and drawn on the chair's drawn seat (the centre of the chair's drawn box; tucked 0.66 m toward the table), seen in the cutaway after a real tap on the rail's eye; the table erased and put back with undo: the sitter follows the seat to its cell's middle and back; the farmhouse with three residents (seed 21): a chair turned like its table, tucked 0.9 m, the sitter on it; config.js `chairTuck` / `CHAIR_SEAT_Z` drive both decor.js and sim.js; the 2-bed hut (seed 4): a real tap places a Farmhouse Table on the floor cell where a housemate stands, and they move at once to another free place, posed and drawn off the table; the armchair erased under its sitter and a floor cell furnished before a planned indoor step starts: neither villager left in mid-air or inside the piece; two housemates indoors with a wish each, panned off screen by real two-finger slides and seen in a cutaway close-up: one ×2 edge bubble ('and 1 more'), never two on one point; `debug.spawn` twice while a traveller is on the way: ids unique and the traveller later moves in with its own. Every check but the console one fails on the pre-repair build. |
 | R7 (`repair7`) | Round-7 repairs (T7.x). The cottage (seed 10) with the Gardener asleep in her bed: a table, then a bookshelf, put on the bed in one edit books her again at once on the armchair, still asleep, never lying where the bed was; with a second bed in the home, the binding gives her that bed and she sleeps in it. On an iPhone 13 (seed 3), a traveller on the lane and Mabel's off-screen wish in the same direction (4 views): two edge bubbles a circle apart, neither merged, and a real tap on the wish opens Mabel's card. In landscape (seed 8), the housemates' merged ×2 edge bubble at 12 camera turns in the cutaway close-up: the badge never overlaps the arrow. Each check fails on the code before the round. |
 | R8 (`repair8`) | The round-7 review (T8.x). The cottage (seed 10) with the Gardener asleep: three roof panels off (she turns waiting) and back, she stays in her own bed throughout; her bed swapped for a table and back, she ends in her bed. A fifth bed added at night to a full four-bed home (sorting first) takes nobody's bed or place. Synthetic bubbles on an iPhone 13: an off-screen wish beside a traveller whose edge point wobbles 1-3 px for 40 frames never flips sides; a wish and a dream at one on-screen point show side by side with their own labels; two merged dreams show their count on a visible pill. On a 320×568 phone (the rail wraps): fanned edge bubbles never sit on a rail button, a real tap on the wish opens its card and leaves Draw off, and with two toasts up nothing sits on the rail or under the toasts. In landscape, a traveller, two wishes (×2) and a dream at one top-edge point: no arrow over another bubble's disc or badge. Each check fails on the code before the round. |
+| R9 (`repair9`) | The round-8 re-check (T9.x). The farmhouse with a sleeper upstairs and every roof panel lifted: waiting, asleep inside the building they wait in, and four unrelated edits never walk them out. Synthetic bubbles on an iPhone 13: a wish, a dream, a vacancy and a 💤 on one roof point all drawn with no bubble over another; a wish passing a dream's point keeps the dream on one side while beside it (at most one change, going home), and a vacancy hovering 3-6 px beside a wish never hops across it; a wish and a dream on one point carried across the top edge and back never swap sides. On a 320×568 phone, 121 pairs of right-edge places for a traveller and a wish: no arrow over another bubble's disc. Each check fails on the code before the round. |
 | R21 | Life you can watch: `PERF_TOWN`, `spawn=20`, `timeFlow` on, `townspeed=60`, `advance(3600)` → `debug.outdoors()` ≥ 0.85; time pinned at 0.42 → ≥ 0.95. (M2 also checks that after the hour, at 10:00, nobody is asleep or on a night stroll.) |
 
 ### 13.5 Rules for working in parallel

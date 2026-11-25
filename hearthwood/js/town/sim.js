@@ -591,9 +591,11 @@ export function createSim({ save = null, readOnly = false } = {}) {
       // only a real bed: a tap of another piece on the bed replaces it in one edit (the sleeper is booked again)
       return bed && bed.t === 'bed' && (!strict || b.cells.has(ck(x, y, z))) ? { bed, x, y, z } : null;
     };
-    // a resident sleeps in their own bed; so does one waiting for their home to be put right (their bed is still theirs)
+    // a resident sleeps in their own bed; so does one waiting for their home to be put right (their bed is still
+    // theirs), but only when that bed is inside the building they wait in: a bed upstairs in a roofless farmhouse's
+    // shell is not, and a sleeper posed outside every building is walked out by the next edit anywhere
     if (kind === 'sleep' && (v.status === 'resident' || v.status === 'waiting')) {
-      const o = bedOf(false);
+      const o = bedOf(v.status === 'waiting');
       if (o) {
         const r = o.bed.r | 0;
         const [wx, wz] = localToWorld(o.x, o.z, r, 0, -0.10);

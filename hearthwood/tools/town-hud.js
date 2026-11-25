@@ -222,17 +222,24 @@ try {
     const op = el ? getComputedStyle(el).opacity : 'none';
     check('H1g', el && Math.abs(parseFloat(op) - 0.4) < 0.01, `dim: true → opacity ${op}`);
   }
-  // merging: two anchors 12 px apart → one bubble "×2"
+  // merging: two anchors of one kind 12 px apart → one bubble "×2"; of two kinds (a wish and a dream under one roof,
+  // R8): side by side, so both cards can be opened
   {
     const [x, y] = pts[1];
     fake.list = [
       { key: 'm1', kind: 'wish', villager: 'v1', icon: '🪑', label: 'a bench by the door', at: worldAt(x, y, 15), tappable: true },
-      { key: 'm2', kind: 'dream', villager: 'v3', icon: '🍎', label: 'an apple tree', at: worldAt(x + 12, y, 15.5), tappable: true },
+      { key: 'm2', kind: 'wish', villager: 'v3', icon: '🍎', label: 'an apple tree', at: worldAt(x + 12, y, 15.5), tappable: true },
     ];
     await sleep(250);
-    const a = bubbleEl('m1'), b2 = bubbleEl('m2');
-    check('H1h', isShown('m1') && !isShown('m2') && a?.querySelector('.hw-bubble-badge')?.textContent === '×2', `bubbles 12 px apart merge into one "×2" (${a?.querySelector('.hw-bubble-badge')?.textContent})`);
-    void b2;
+    const a = bubbleEl('m1');
+    check('H1h', isShown('m1') && !isShown('m2') && a?.querySelector('.hw-bubble-badge')?.textContent === '×2', `two wishes 12 px apart merge into one "×2" (${a?.querySelector('.hw-bubble-badge')?.textContent})`);
+    fake.list = [
+      { key: 'm3', kind: 'wish', villager: 'v1', icon: '🪑', label: 'a bench by the door', at: worldAt(x, y, 15), tappable: true },
+      { key: 'm4', kind: 'dream', villager: 'v3', icon: '🍎', label: 'an apple tree', at: worldAt(x + 12, y, 15.5), tappable: true },
+    ];
+    await sleep(250);
+    const r3 = bubbleEl('m3')?.getBoundingClientRect(), r4 = bubbleEl('m4')?.getBoundingClientRect();
+    check('H1h', isShown('m3') && isShown('m4') && !!r3 && !!r4 && Math.abs(r3.left - r4.left) >= 36, `a wish and a dream 12 px apart sit side by side (${r3 && r4 ? Math.round(Math.abs(r3.left - r4.left)) : '?'} px)`);
   }
   // off-screen traveller → edge arrow inside the free area; passer-by: arrow only while off-screen
   {
