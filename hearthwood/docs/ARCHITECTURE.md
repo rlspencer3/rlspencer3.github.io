@@ -16,7 +16,8 @@ hearthwood/
   js/world.js           placed pieces, undo/redo, save/load, template cache   (core)
   js/batcher.js         static batching: merges settled pieces into ~1 mesh per material   (core)
   js/camera.js          orbit camera + touch gestures          (core)
-  js/builder.js         placement controller (tools, ghost, auto-roof, auto-gable)  (core)
+  js/builder.js         placement controller (tools, ghost, auto-roof, auto-gable, tap again / Turn)  (core)
+  js/facing.js          smart facing: the rules that pick a new piece's facing from its neighbourhood  (core, pure)
   js/effects.js         pop-in tweens, dust puffs              (core)
   js/storage.js         localStorage slots, autosave, share codes (core)
   js/thumbs.js          palette thumbnails                     (core)
@@ -38,6 +39,8 @@ hearthwood/
                         HW_TOWN=1 runs it with the town's logic on: town=fresh&townrender=0)
   tools/town-regress.mjs   Living Town end-to-end regression (R1–R21 of docs/LIVING.md §13.4; --only=section, --batch)
   tools/town-brain.js / town-look.js / town-hud.js   per-package acceptance scripts (shot.mjs --script bodies)
+  tools/smart-regress.mjs  smart-facing and lifted-preview regression (docs/SMART_BUILD.md §9; --only=A,H), with tools/smart-scenes.js
+                        (its page script: the 220 rule scenes and the blueprint agreement metric)
   sw.js                 service worker (offline copy, one source per page load) — add every new file to its CORE list
   manifest.webmanifest  install-as-app manifest (start_url / scope / id "./", icons in icons/)
   README.md             how to play, and how to run / test the game
@@ -139,7 +142,9 @@ cache key gains `|g`); pieces built off the lot (palette thumbnails at x = 500) 
   * `flat`: rise 0. `cap`: a self-contained top piece (e.g. pyramid), rise as declared. `roof_pyramid` is contextual:
     sides that meet another roof panel join it (no eave / top boards there); only open sides get an overhang.
 * The builder auto-stacks: a slope placed uphill of another slope with the same `r` starts where that one ends;
-  corners stack diagonally. Users can nudge with roof ▲▼ (`state.hOffset`, −8..+8 half-steps).
+  corners stack diagonally (`facing.roofHeight`, also `builder.autoRoofHeight`). Users can nudge with roof ▲▼
+  (`state.hOffset`, −8..+8 half-steps). A new panel's `r` comes from smart facing (downhill toward the nearest eave,
+  rows continued, lean-tos away from the wall they lean on: "Smart facing" below), and its `h` from that `r`.
 * Roofs over the top floor: records stop at y = MAX_LEVEL, so a roof resting on Floor-5 walls is stored as
   y = MAX_LEVEL lifted a storey (`lift` = 2 half-steps: h = autoRoofHeight(…, MAX_LEVEL + 1) + 2; ▲▼ can't take it below
   the lift). `world.validate` accepts roof bases up to hs = 2·MAX_LEVEL + 12 (storage keeps h ≤ 12, `MAX_PIECES`
@@ -197,6 +202,11 @@ registerPiece({
 
 `ctx = { world, def, p, get(key) → neighbour record | undefined, defOf(record) → def }` — use `K.*` keys from config.js.
 
+Optional smart-facing fields (js/facing.js): `face: '<rule group>'` (which rule picks a new piece's facing; default
+`facing.FACE[id]`, else walls / openings → 'wallEdge', roofs by `roof.kind`, other edge pieces 'canon', other cell
+pieces 'front') and `sym: 1 | 2 | 4` (how many facings look different; default `facing.SYM[id]`, else 4). A piece with
+`sym: 1` (a railing) or `autoGable` never turns: no Turn button, tap again places as before.
+
 ### build() rules
 
 * Return a `THREE.Group` in the local frame above. Never add lights, never allocate textures per piece.
@@ -230,16 +240,20 @@ Texture UVs are in **meters**. Texture periods: walls 2 m horizontally and 1.25 
 ## State (js/state.js)
 
 `state.set(patch)`, `state.on(fn(changedKeys))`. Keys: `tool` ('build'|'erase'|'paint'|'pick'), `pieceId`, `category`,
-`level`, `rot`, `hOffset`, `drawMode`, `seeAll`, `mats` (matGroup → material id), `colors` (material id → colour),
+`level`, `rot` (the facing the player last chose — set by a turn, Pick and Show me's hand-over; used only where no
+facing rule has a signal, normalised per piece: "Smart facing" below), `hOffset`, `drawMode`, `seeAll`, `mats` (matGroup → material id), `colors` (material id → colour),
 `accent`, `paintMat`, `paintColor`, `paintTarget` ('main'|'accent'), `time` (0..1, 0.5 = noon), `timeFlow`,
 `season`, `weather` ('clear'|'rain'|'snow'|'leaves'), `sound`, `music`, `shadows`, `quality` ('low'|'high'|'auto'),
 `photoMode`, `blueprint`, `slot`, `village` (villagers & wishes on, default true), `chatter` (villager babble, default
-true). Settings persist in localStorage (validated on load; writes debounced to at most one
+true), `aimLift` (Preview above your finger: a touch aim lifts above the finger, default true; the builder keeps
+`rig.aimLift = aimLift && !photoMode`). Settings persist in localStorage (validated on load; writes debounced to at most one
 per 600 ms and flushed on `pagehide` / hidden; `state.save()` writes now). Replace objects (`mats`, `colors`) — don't mutate.
 
 Event bus `events.emit(type, detail)` / `events.on(type, fn)`:
 * `world-change` {kind: 'add'|'remove'|'clear'|'load'|'undo'|'redo', p, prev, count} (`discardLast()` reports 'undo')
 * `placed` {p, def, replaced}
+* `turned` {key, r, dir} a placed piece was turned (tap again, Turn, R); {pin: true, r, dir} the preview of an empty
+  slot was turned; {stroke: true, r, dir} a draw stroke's line was — the UI spins the Turn icon
 * `sfx` {name, flavor, opts?} — names: place, replace, remove, paint, rotate, click, undo, level, error, success, open, close, camera, blueprint-step, blueprint-done,
   and the town's wish, wish-granted, move-in, gift, villager, hop; `opts` may carry `pitch`, `gain` (0..2) and `pan` (−1..1)
 * `toast` {text, kind?: 'info'|'warn'|'success', ms?, action?: {label, fn}} — also sent once by storage.js when an autosave can't be written;
@@ -356,13 +370,32 @@ The farmhouse frame costs ~130 draw calls in total instead of ~650 (~1,250 on fr
 to the rig's `bounds`, `minPhi..maxPhi`, `minRadius..maxRadius`), `getView()`, `focus(x, y, z, radius?)`, `snap()`,
 `rotateBy(dθ)`, `zoomBy(f)`, `setTargetY(y)`, `setInsets(top, bottom, left, right)` (px of the canvas covered by UI: the
 view is centred in the free area with an eased view offset), `goal` ({target, theta, phi, radius} the view eases to),
-`busy`, `drawMode`. Optional callbacks: `onTap(x, y, e)`, `onHover(x, y)`, `onDrawStart/Move/End(x, y)`, `onDrawCancel()`,
-`onGestureStart()`, `onPress(x, y, type)`, `onAimStart/onAimMove(x, y)`, `onAimEnd(x, y, cancelled)`, `pickPoint(x, y)`
-(pinch / slide pivot), `orbitPoint(x, y)` (twist / orbit pivot). Touch: tap = action, press-and-hold 450 ms = aim
-(preview follows the finger, lift to place, lift over the UI to cancel), 1-finger drag = orbit (or draw), 2 fingers =
-pinch / twist / slide anchored under the fingers; a second finger soon after a stroke starts cancels the stroke.
-An aim also cancels when the finger lifts outside the canvas rect or over anything that isn't the canvas
-(`elementFromPoint`: UI chrome, or null past the edge of the screen): `onAimEnd(x, y, true)`.
+`busy`, `drawMode`, `aimLift`, `aim`. Optional callbacks: `onTap(x, y, e)`, `onHover(x, y)`, `onDrawStart/Move/End(x, y)`,
+`onDrawCancel()`, `onGestureStart()`, `onPress(x, y, type)`, `onAimStart(fx, fy)`, `onAimMove(x, y, off)`,
+`onAimEnd(x, y, cancelled, e)`, `pickPoint(x, y)` (pinch / slide pivot), `orbitPoint(x, y)` (twist / orbit pivot).
+Touch: tap = action at the finger, press-and-hold 450 ms = aim (lift to place, lift with the aim point over the UI to
+cancel), 1-finger drag = orbit (or draw: a held finger in Draw mode never aims, its stroke starts under it), 2 fingers =
+pinch / twist / slide anchored under the fingers; a second finger soon after a stroke starts cancels the stroke, and a
+second finger on the canvas ends an aim cancelled. An aim also cancels when it lifts with the finger outside the canvas
+rect (past the edge of the screen) or with the **aim point** (the lifted point — the finger itself when nothing lifts)
+off the canvas or over anything that isn't the canvas (`_aimOff`: `elementFromPoint` there), so a finger resting on
+the tray still places where the ring is over the view. `aim.off` (and `onAimMove`'s third argument) says so while the
+finger moves: the ring turns dashed and dimmer (`.hw-aim-off`) and the builder hides the preview.
+
+**The lifted aim** (docs/SMART_BUILD.md §6). The rig owns the aim point; every `onAim*` callback gets it, so the
+builder (hover → resolve, `aimEnd` → `tap`, Erase / Paint / Pick) and the town's `onAimEnd` wrapper (Show me snap) act
+at it with no code of their own. `onAimStart(fx, fy)` is the fingertip (k 0, the press preview); then `update(dt)`
+eases the point up to `lift` px straight above the finger over 140 ms (easeOutCubic, at most 25 ms of ease per frame
+so a slow frame never jumps it far), calling `onAimMove` on each frame it moves ≥ 0.5 px and on every finger move
+(keeping the offset). `lift = clamp(round(min(innerWidth, innerHeight) × 0.16), 52, 72)` for `pointerType 'touch'`
+when `aimLift` is true (62 on an iPhone either way up, 52 at 320 px), else 0 (mouse never aims; a pen aims under its
+tip). Under the top bar (`insets.top + 6`) the point stops rising and leans sideways toward the screen's middle, the
+offset kept; x stays 2 px inside the canvas. `onAimEnd(x, y, cancelled, e)` gets the point as drawn when the finger
+lifts (mid-ease too). The ring is `div.hw-aim` (created lazily in the canvas's parent `#game`, so under `#ui`;
+`pointer-events: none`, transforms only): an 18 px white ring with a dark halo and a centre dot, a 2 px tether from 26 px
+off the fingertip to the ring's edge (hidden under 6 px), opacity = the ease; hidden on lift, cancel, a second finger
+and with lift 0. `rig.aim` is null outside an aim, else `{ fx, fy, x, y, k, lift, off }` (read-only, for tests); turning
+`aimLift` off mid-aim drops the point back to the finger.
 
 ### Effects (js/effects.js, `app.effects`)
 
@@ -389,8 +422,17 @@ first-visit lot); never with `?nosave=1` or a showcase. `autosave()` returns fal
 Builder API: `rotate(dir)`, `raise(d)`, `setLevel(n)`, `selectPiece(id)`, `undo()`, `redo()`, `place(rec, opts)`,
 `resolve(sx, sy)`, `hideGhost()`, `pickPiece(sx, sy)`, `pointAt(sx, sy)` (world point under the pointer: a piece, else
 the active level's plane), `orbitAt(sx, sy)` (middle of the building under the pointer, or null), `autoRoofHeight(def, x,
-z, r, level)`, `autoGable(def, p)`, `eraseAt / paintAt / pickAt(sx, sy)`, `drawStart / drawMove / drawEnd / drawCancel`.
-`resolve` tries, in order: blueprint guides (guided mode: taps snap to a glowing guide; off-guide taps for pieces that
+z, r, level)`, `autoGable(def, p)`, `eraseAt / paintAt / pickAt(sx, sy)`, `drawStart / drawMove / drawEnd / drawCancel`,
+`facingAt(def | id, p, { roofLevel, lift })` (the auto facing at a record's spot with the current view and fallback:
+tests and tools), `setHints(recs | null)` (the town's Show me recs, below), `lastPlaced` ({ key, p, v } of the last
+single placement or turn), and the rig's touch callbacks `press(sx, sy)` (the preview where a finger lands),
+`aimStart(fx, fy)`, `aimEnd(x, y, cancelled, e)` (→ `tap`): the aim ones get the rig's lifted aim point, so the preview,
+the placement and every re-hover after a state change during an aim (`lastScreen`) use it (Camera above).
+`resolve(sx, sy)` → `{ p, def, key, slotKey, valid, reason, existing, action, facing,
+guided? }`: `action` is 'place' | 'replace' | 'turn' | 'restyle', `facing.source` says where `p.r` came from ('auto'
+with `rule`, `tie`, `fallback`; 'guide', 'hint', 'turn', 'restyle', 'blueprint', 'panel', 'keep', 'pin', 'line'),
+`slotKey` is the slot before its facing is known (the world key, or `R|x|y|z|roofLv|lift` for a roof resting on wall
+tops, whose world key depends on `r` through its height). `resolve` tries, in order: blueprint guides (guided mode: taps snap to a glowing guide; off-guide taps for pieces that
 still have guides are rejected with a hint), gables (snap to the open roof end pointed at, on any floor), the piece under
 the pointer (windows / doors also swap walls on other visible floors), then the grid. Roof pieces settle on top of the
 walls under the pointer whatever floor is active (fixed for the length of a draw stroke). With the finger on a wall,
@@ -448,6 +490,58 @@ A railing (not a garden piece) gets no fallback: unsupported upstairs, it shows 
 * A placed piece whose cutaway level is above the current cutaway turns `seeAll` on ('👁️ Showing every floor…').
 * The build grid is unlit: it fades (opacity 0.28 → ×(1 − 0.55·night)) and tints moonlit blue with `env.night`.
 
+#### Smart facing (js/facing.js, docs/SMART_BUILD.md)
+
+A new piece's facing is decided once, when it is placed (the preview shows it first); loading, undo / redo, stamping,
+guided snaps and contextual rebuilds never decide it again, so stored records keep their `r`. After `resolve` has
+decided the slot exactly as above, `p.r` comes from the first of: a blueprint guide's `r`; a Show me hint for the slot
+(its `r`, roofs its `h` too) unless the slot already holds the piece in hand; **tap again** (below: turn or restyle); a
+different roof piece tapped onto a panel (the panel's `r` and `h`); the same piece already in the slot with no turn
+(a stroke passing over it, a railing: kept); a pin for the slot (Turn / R over the preview of an empty slot); a draw
+stroke's line facing; else `facing.autoFacing(def, p, ctx)` (one-entry memo keyed by world version, slot key, piece,
+camera angle rounded to 0.01 rad and fallback). Roof `h` is computed from that `r` (a turned / restyled / hinted panel
+keeps its own), then `autoGable` as before.
+* `facing.js` is pure (imports config.js and catalog.js): `autoFacing(def, p, { get, cam: [x, z] (target → camera),
+  fallback, roofLevel, lift })` → `{ r, rule, tie, fallback, scores, why, order }` scores the candidate facings from slot-key
+  lookups round the spot (at most 168 cells of ring search, no world scans; ~0.01 ms median, p99 ~0.2 ms): 19 rule
+  groups (`faceGroup(def)`): walls / windows / doors face outward, roofs run downhill to the nearest eave and continue
+  rows (lean-tos away from the wall they lean on), hips / valleys close their rows, furniture backs onto the best
+  wall (one on its own cell's edges when there is one), chairs face a table, seats a hearth in front of them,
+  benches a pond / path / the house, stairs climb along a wall to the floor above, porch steps to the platform, deck
+  boards away from the house, fences show their good side to a path or away from the house, garden things with a
+  front face away from the house; trees and plants have no rule. Ties go to the camera (the front, or a slope's face,
+  toward the viewer); no signal → the fallback `state.rot`.
+  `order` is the tap-again order at the spot: the best first, then the rest by score (ties as `pick` breaks them), a
+  roof slope's opposite right after its best; null with no signal and for tables (+90°). Also `nextFacing(def, r,
+  order, cont)` (a fresh tap: `order[0]`, or `order[1]` when r already is `order[0]`; `cont`, a run of taps on the
+  same piece: the facing after r; no order → `turnOf`), `turnable(def)`, `turnOf(def, r, dir)` (+90° / a flip: Turn
+  and R), `sameFacing(def, a, b)`, `symOf`, `roofHeight(get, def, x, z, r, L)`, `clearPath`.
+* **Tap again** (`_sameTarget`): T1 — a furniture-like cell piece (not a `free` plant / tree) of this part under the
+  finger, on the active level, when the tapped slot is no sensible place for another one (occupied, invalid, its
+  floor hidden from the piece behind a solid wall, or — layer I, furniture and garden things — the cell right next to
+  the piece, the floor the finger's ray meets after passing through it); T2 — the tapped slot itself holds this part
+  (never a piece other than the one under the finger). Same look → `action: 'turn'`, `p.r = nextFacing(def, cur.r,
+  order, cont)` with `order` from `autoFacing` at the piece's spot (`_nextTurn`, through the memo; `cont` when
+  `_turnRun` = { key, r, v } says the last tap-again turn was this piece, to this facing, at this `world.version`)
+  (tap(): `world.update(key, { r })`, then `_turnRun` is set; one undo step, popIn, 'rotate' sfx, 6 ms buzz on touch,
+  `state.rot` = the new facing; ignored within 250 ms of placing that piece there: a double tap); another look →
+  'restyle', facing kept. Never during a stroke, for a guide (or a finished piece of the blueprint being followed: a
+  tap that changes nothing there says '✨ This one follows the blueprint' with a click, and so does Turn right after),
+  or for pieces `turnable` says no to.
+* `rotate(dir)` (Turn button, R / Shift+R): a stroke in progress → its current line (`drawing.face`), the segments it
+  laid there turn too inside the stroke's batch; the preview over a placed piece of this part ('turn' / 'restyle') →
+  that piece turns now (during a touch aim the lift then adds no second turn); the preview over an empty / replaceable
+  slot → a pin `{ slotKey, id, r }` (cleared when the resolved slot changes, on any placement, on a piece / tool
+  change); no preview → the piece just placed (`lastPlaced`, still as placed, world unchanged since, this part); else
+  a hint toast. Turn / R step a plain quarter (`turnOf`, ±dir), not the tap-again order. Guide-built pieces (and the
+  last tap having hit one of this part, `_guideTap`) answer '✨ This one follows the blueprint'.
+* Strokes: fences, hedges, railings and beams keep the facing their first segment on a grid line took
+  (`drawing.face`, keyed `axis|line|y`); a pin on the first slot seeds the line; a stroke never turns a piece it passes
+  over (same part in the slot → its `r` kept); `_strokeRec` fill-ins use the same order.
+* Show me hints: town/index.js calls `builder.setHints(recs)` when Show me highlights recs (start and `retarget`) and
+  `setHints(null)` in `endShowMe`; keys are the slot keys (roofs `R|x|y|z`), so the preview on a Show me spot is what
+  the town's snap builds.
+
 ## Town (js/town/, `app.town`)
 
 The Living Town (villagers with move-in recipes, wishes, day/night routines, the Cozy meter, thank-you gifts). The full
@@ -490,7 +584,8 @@ persistence, §12.12 params, §12.13 debug API); this is the short map.
   `muteHint(homeId)`, `answerIntro(lovely)`, `follow(id)`, `focusHome(homeId)`, `update(dt)`, `debug` (§12.13). Every
   entry point is guarded: a town failure turns villagers off for the session (one `console.error`) and building carries
   on.
-* **Input.** index.js wraps `rig.onTap` / `rig.onPress` / `rig.onAimEnd`; builder.js is untouched. With the Build tool
+* **Input.** index.js wraps `rig.onTap` / `rig.onPress` / `rig.onAimEnd`; builder.js is untouched. `onAimEnd` gets the
+  rig's lifted aim point (a Show me ring under the lifted point snaps); `onPress` still gets the finger. With the Build tool
   only a tap on a villager's body selects them (a tap beside them builds), and a tap on a Show me ring or ghost always
   places the piece exactly there. Erase / Paint / Pick taps on a villager open their card and change nothing.
   camera.js is untouched too: while **Follow** is on, index.js gives the rig instance thin wrappers (`_zoomAbout`,
@@ -573,6 +668,12 @@ game works from any subpath (GitHub Pages: `/hearthwood/`); the manifest's `star
   draw calls & triangles. `--script` bodies run inside an async function in the page and may `return` a value.
 * With more than 100 pieces (`?showcase=all` holds 106: 96 + the 10 gifts) the contact sheet's last row sits just past
   the lot's front edge (z = 11).
+* `node tools/smart-regress.mjs` — smart-building regression (docs/SMART_BUILD.md §9: A rules in 266 scenes, B blueprint
+  agreement in four build orders, C–G real taps / Turn / R / strokes / guides / saves / Show me (G5L: an aim whose
+  lifted point is on a Show me ring), H the lifted aim with real touches on an iPhone 13, an 844 × 390 landscape and a
+  320 × 568 phone (lift, ease, ring, top-bar clamp, quick tap, tray and pinch cancels, mouse / pen / Draw, Erase, the
+  setting), I the village, J cost, R the repair rounds' findings with real touches (§14, §15), K console errors;
+  `--only=A,H`). Exits 1 on failure. `HW_ROOT=…` tests another checkout.
 * `node tools/batch-regress.mjs` — static-batching regression, 48 checks (stamp/erase/paint/undo/levels/pick/touch,
   mid-cascade invariants, batched vs unbatched pixel comparison, draw-call ratio). Exits 1 on failure. `HW_ROOT=…` tests
   another checkout.

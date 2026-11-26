@@ -44,6 +44,12 @@ const order = [];
  *                                        the tray once unlocked (docs/LIVING.md §8); job id of the giver, or null
  *   walk: 'solid'|'soft'                 how villagers path round the piece (town nav, LIVING.md §6.1): solid items
  *                                        block their cell, soft ones can be walked over at a cost
+ *   face: string                         smart-facing rule group (js/facing.js, docs/SMART_BUILD.md §4.5: 'back',
+ *                                        'seat', 'chair', 'table', 'rug', 'bench', 'front', 'free', 'wallEdge', 'fence',
+ *                                        'canon', 'slope', 'hip', 'valley', 'climb', 'steps', 'deck', 'pergola');
+ *                                        default: facing.js FACE by id, else by category / slot
+ *   sym: 1|2|4                           how many facings look different (2: a half turn looks the same, the rules
+ *                                        answer 0 or 1; 1: turning shows nothing, so it never turns); default facing.js SYM
  */
 export function registerPiece(def) {
   if (!def || !def.id) throw new Error('registerPiece: missing id');

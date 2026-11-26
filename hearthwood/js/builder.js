@@ -3,11 +3,12 @@
 
 import * as THREE from 'three';
 import {
-  CELL, LEVEL_H, STEP, levelY, DIRS, K, MAX_LEVEL, GRID_MIN, GRID_MAX, clamp,
+  CELL, LEVEL_H, STEP, levelY, K, MAX_LEVEL, GRID_MIN, GRID_MAX, clamp, slotKey as worldSlotKey,
 } from './config.js';
 import { getDef, CATEGORIES, piecesIn } from './catalog.js';
 import { state, events } from './state.js';
 import { ghostMat, MATERIALS } from './materials.js';
+import { autoFacing, faceGroup, turnable, turnOf, nextFacing, roofHeight, clearPath } from './facing.js';
 
 const _ray = new THREE.Raycaster();
 const _ndc = new THREE.Vector2();
@@ -27,6 +28,9 @@ const HOP_UNDO = 1;               // a turn within this many cells of a hop turn
 const TURN_FIX = 4;               // a hop to the next line within this many cells of a corner moves the corner there…
 const TURN_MEAN = 0.35;           // …when the finger has kept (on average) this far toward that line since the turn
 const ROOF_FAR = '🏠 Tap the top of a wall to rest the roof on it';
+const DOUBLE_TAP_MS = 250;        // a tap this soon after placing the same piece there is a double tap, not "turn it"
+const TURN_HINT = '↻ Tap a piece you placed with the same piece in hand to turn it';
+const TURN_GUIDE = '✨ This one follows the blueprint';
 // build grid: soft white by day, a dim moonlit blue at night (so it doesn't glow over the scene)
 const GRID_OPACITY = 0.28;
 const GRID_NIGHT_DIM = 0.55;
@@ -56,13 +60,23 @@ export class Builder {
     this._gc = null;                // cached gable candidates
     this._top = null;               // cached highest structural level
     this._gbp = null;               // cached blueprint pieces for guide snapping
+    // smart facing (docs/SMART_BUILD.md §4, §5): the piece just placed (Turn / R turn it), a pin (Turn / R over the
+    // preview of an empty slot: that slot's facing), the town's Show me hints, a one-entry memo of autoFacing
+    this.lastPlaced = null;         // { key, p, v: world.version, placed: ms (0 after a turn) }
+    this._pin = null;               // { slotKey, id, r }
+    this._hints = null;             // Map slotKey → Show me rec
+    this._memo = null;
+    this._aimTurned = null;         // key Turn turned during this aim: the lift adds no second turn
+    this._turnRun = null;           // { key, r, v: world.version } the last tap-again turn: the next tap on it goes on round
+    this._get = (k) => this.world.get(k);
 
     this._makeHelpers();
     rig.onTap = (x, y, e) => this.tap(x, y, e);
     rig.onHover = (x, y) => this.hover(x, y);
     rig.onPress = (x, y) => this.press(x, y);
     rig.onAimStart = (x, y) => this.aimStart(x, y);
-    rig.onAimMove = (x, y) => this.hover(x, y);
+    // (off: lifting there would cancel — the aim point is over the tray or a bar: no preview, the ring turns dashed)
+    rig.onAimMove = (x, y, off) => (off ? this.hideGhost() : this.hover(x, y));
     rig.onAimEnd = (x, y, cancelled, e) => this.aimEnd(x, y, cancelled, e);
     rig.onDrawStart = (x, y) => this.drawStart(x, y);
     rig.onDrawMove = (x, y) => this.drawMove(x, y);
@@ -113,12 +127,14 @@ export class Builder {
 
   _onState(changed) {
     if (changed.includes('pieceId')) { const d = getDef(state.pieceId); if (d) (this._lastInCat ||= {})[d.cat] = d.id; }
+    if (changed.includes('pieceId') || changed.includes('tool')) this._pin = null;
     if (changed.includes('level') || changed.includes('seeAll')) this._applyLevel();
     if (changed.some((k) => ['pieceId', 'rot', 'tool', 'hOffset', 'mats', 'colors', 'accent', 'level'].includes(k))) {
       if (this.target && this.lastScreen && this.ghostVisible) this.hover(this.lastScreen.x, this.lastScreen.y);
       else this.hideGhost();
     }
     if (changed.includes('drawMode')) this.rig.drawMode = state.drawMode;
+    if (changed.includes('aimLift') || changed.includes('photoMode')) this.rig.aimLift = !!state.aimLift && !state.photoMode;
     if (changed.includes('tool')) this.grid.visible = state.tool === 'build' && !state.photoMode;
     if (changed.includes('photoMode')) { this.grid.visible = !state.photoMode && state.tool === 'build'; this.hideGhost(); }
   }
@@ -499,8 +515,15 @@ export class Builder {
   _strokeRec(def, L, slot) {
     if (def.slot !== 'edge' || this._guidesLeft(def)) return null;
     const p = { t: def.id, y: L, a: slot.a, x: slot.x, z: slot.z };
-    if (def.rot === 'four') p.r = state.rot & 3;
-    else if (def.rot === 'flip') p.r = state.rot >= 2 ? 2 : 0;
+    if (def.rot !== 'none') {
+      // the same piece there keeps its facing (a stroke never turns what it passes over); else the line's facing
+      // (fences, hedges, railings, or a line turned by Turn / R), else the auto facing
+      const here = this.world.get(worldSlotKey(def, p));
+      const line = this.drawing?.face?.get(this._lineKey(def, p));
+      if (here && here.t === def.id) p.r = here.r | 0;
+      else if (line !== undefined) p.r = line;
+      else p.r = this._auto(def, p, worldSlotKey(def, p), null, 0).r;
+    }
     if (def.autoGable) Object.assign(p, this.autoGable(def, p));
     const m = this.materialFor(def);
     if (m) p.m = m;
@@ -852,14 +875,65 @@ export class Builder {
         Object.assign(p, { a: c.a, x: ex, z: ez });
       }
     }
+    // 5. the facing (docs/SMART_BUILD.md §4.1): the slot above is decided exactly as it always was; only now is p.r
+    //    chosen. slotKey is that slot before the facing is known (a roof's world key depends on r through its height):
+    //    the pin and the memo are keyed by it
+    const sk = this._slotKeyOf(def, p, fixed, roofLv, lift);
+    if (this._pin && this._pin.slotKey !== sk) this._pin = null;
+    let action = null, facing = null, guided = false, target = null;
     if (fixed === 'guide') {
       // follow the blueprint exactly (facing, roof height, gable shape)
       if (def.rot !== 'none' && p.r === undefined) p.r = 0;
+      facing = { source: 'guide' };
+      guided = true;
     } else {
-      if (def.rot === 'four') p.r = state.rot & 3;
-      else if (def.rot === 'flip') p.r = state.rot >= 2 ? 2 : 0;
-      if (def.layer === 'R' && fixed !== 'roof') {
-        // (a tapped panel keeps its own height)
+      // today's slot and what is in it (a roof resting on a wall top has none yet: its key depends on its facing)
+      const K0 = def.layer === 'R' && fixed !== 'roof' ? null : worldSlotKey(def, p);
+      const cur0 = K0 ? this.world.get(K0) : undefined;
+      const hint = def.rot !== 'none' ? this._hintFor(def, p) : null;
+      if (hint && !(cur0 && cur0.t === def.id)) {
+        // a Show me spot: the wish's own facing (and roof height), so this preview is what the town's snap builds
+        p.r = hint.r | 0;
+        if (def.layer === 'R') p.h = hint.h | 0;
+        facing = { source: 'hint' };
+      } else if (def.rot !== 'none') {
+        target = this._sameTarget(def, p, pick, L, K0, cur0, dr);
+        if (target) {
+          // tap again: that piece's own slot; the same look turns it, another look restyles it (facing kept)
+          for (const f of ['x', 'y', 'z', 'a', 'h']) { if (target.p[f] !== undefined) p[f] = target.p[f]; else delete p[f]; }
+          if (this._guideBuilt(target)) {
+            // a finished piece of the blueprint being followed is never turned
+            p.r = target.p.r | 0;
+            facing = { source: 'blueprint' };
+            guided = true;
+          } else {
+            action = this._sameLook(def, p, target.p) ? 'turn' : 'restyle';
+            // a tap again steps to the next most likely facing there (the rules' order), not blindly +90°
+            p.r = action === 'turn' ? this._nextTurn(def, target) : target.p.r | 0;
+            facing = { source: action };
+          }
+        } else if (fixed === 'roof' && cur0) {
+          // another roof piece tapped onto a panel swaps in place with that panel's facing (and height)
+          p.r = cur0.r | 0;
+          facing = { source: 'panel' };
+        } else if (cur0 && cur0.t === def.id) {
+          // the same piece there and no turn (a stroke passing over it, a railing): it keeps its facing
+          p.r = cur0.r | 0;
+          facing = { source: 'keep' };
+        } else if (this._pin && this._pin.id === def.id) {
+          p.r = this._pin.r;
+          facing = { source: 'pin' };
+        } else if (dr?.face?.has(this._lineKey(def, p))) {
+          p.r = dr.face.get(this._lineKey(def, p));
+          facing = { source: 'line' };
+        } else {
+          const a = this._auto(def, p, sk, roofLv, lift);
+          p.r = a.r;
+          facing = { source: 'auto', rule: a.rule, tie: a.tie, fallback: a.fallback };
+        }
+      }
+      if (def.layer === 'R' && fixed !== 'roof' && !target && facing?.source !== 'hint') {
+        // (a tapped panel, a panel turned or restyled in place and a Show me spot keep their own height)
         p.h = this.autoRoofHeight(def, p.x, p.z, p.r, p.y + lift / 2) + lift;
         p.h = clamp(p.h + state.hOffset, lift, 9 + lift);
       }
@@ -878,7 +952,9 @@ export class Builder {
     if (!q) return null;
     const v = this.world.validate(q);
     const key = this.world.keyOf(q);
-    const out = { p: q, def, key, valid: v.ok, reason: v.reason, existing: this.world.get(key) };
+    const out = { p: q, def, key, slotKey: sk, valid: v.ok, reason: v.reason, existing: this.world.get(key), action, facing };
+    if (!out.action) out.action = out.existing ? 'replace' : 'place';
+    if (guided) out.guided = true;
     if (tall && out.valid) { out.valid = false; out.reason = tall; }
     // pointing at a wall too far below its top: say so (and show where the roof would land) rather than place it
     if (roofFar && out.valid) { out.valid = false; out.reason = ROOF_FAR; }
@@ -891,51 +967,130 @@ export class Builder {
     return out;
   }
 
-  /** Auto height (in half-steps above the level) so roof panels continue the slope below them. */
+  /** Auto height (in half-steps above the level) so roof panels continue the slope below them (facing.roofHeight). */
   autoRoofHeight(def, x, z, r, L) {
-    const base = L * 2;
-    const kind = def.roof?.kind || 'slope';
-    if (kind === 'flat' || kind === 'cap') return 0;
-    const [dx, dz] = DIRS[r];
-    const [ex, ez] = DIRS[(r + 1) & 3];
-    if (kind === 'inner') {
-      // a valley sits level with the slopes beside it, or stacks diagonally on a valley below it
-      let best = -1;
-      for (let hs = base; hs <= base + 12; hs++) {
-        const d = this.world.get(K.R(x - dx - ex, hs, z - dz - ez));
-        const dd = d && getDef(d.t);
-        if (dd?.roof?.kind === 'inner' && d.r === r) best = Math.max(best, hs + (dd.roof.rise ?? 1));
-        for (const [cx, cz, rr] of [[x - dx, z - dz, (r + 1) & 3], [x - ex, z - ez, r]]) {
-          const q = this.world.get(K.R(cx, hs, cz));
-          const qd = q && getDef(q.t);
-          if (qd?.roof && (qd.roof.kind || 'slope') === 'slope' && q.r === rr) best = Math.max(best, hs);
-        }
+    return roofHeight(this._get, def, x, z, r, L);
+  }
+
+  // ---------------------------------------------------------------- smart facing (docs/SMART_BUILD.md §4, §5)
+
+  /** The slot before its facing is known: the world key, or for a roof resting on wall tops its cell + level + lift. */
+  _slotKeyOf(def, p, fixed, roofLv, lift) {
+    if (def.layer !== 'R') return worldSlotKey(def, p);
+    if (fixed === 'roof' || fixed === 'guide') return `R|${p.x}|${p.y}|${p.z}|=${p.h | 0}`;
+    return `R|${p.x}|${p.y}|${p.z}|${roofLv}|${lift}`;
+  }
+
+  /** A stroke's grid line for an edge piece (its facing memo, §5.4); one key for a stroke of cell pieces. */
+  _lineKey(def, p) {
+    return def.slot === 'edge' ? `${p.a}|${p.a === 'x' ? p.z : p.x}|${p.y}` : 'cell';
+  }
+
+  /** autoFacing for a slot, from the camera and the fallback (state.rot); one-entry memo (a hit is exact, §4.6). */
+  _auto(def, p, sk, roofLv, lift) {
+    const th = Math.round((this.rig?.goal?.theta ?? 0) * 100) / 100;
+    const fb = state.rot & 3;
+    const mk = `${this.world.version}|${sk}|${def.id}|${th}|${fb}`;
+    if (this._memo && this._memo.k === mk) return this._memo.v;
+    const v = autoFacing(def, p, { get: this._get, cam: [Math.sin(th), Math.cos(th)], fallback: fb, roofLevel: roofLv ?? p.y, lift: lift || 0 });
+    this._memo = { k: mk, v };
+    return v;
+  }
+
+  /** The auto facing at a record's spot with the current view and fallback (for tests and tools). */
+  facingAt(def, p, extra = {}) {
+    if (typeof def === 'string') def = getDef(def);
+    if (!def) return null;
+    const th = Math.round((this.rig?.goal?.theta ?? 0) * 100) / 100;
+    return autoFacing(def, p, { get: this._get, cam: [Math.sin(th), Math.cos(th)], fallback: state.rot & 3, roofLevel: extra.roofLevel ?? p.y, lift: extra.lift || 0 });
+  }
+
+  /**
+   * The facing a tap again gives a placed piece (facing.nextFacing over the rules' order at its spot; memo): the best
+   * first, unless this tap carries on a run of tap-again turns on this very piece with nothing changed since (then the
+   * next in the order, so a run visits every facing). Turn / R, an undo or any other change starts a fresh run.
+   */
+  _nextTurn(def, target) {
+    const q = target.p, run = this._turnRun;
+    const a = this._auto(def, q, `turn|${target.key}|${q.r | 0}`, q.y, 0);
+    const cont = !!run && run.key === target.key && run.v === this.world.version && run.r === (q.r | 0);
+    return nextFacing(def, q.r | 0, a.order, cont);
+  }
+
+  /**
+   * Tap again (§5.1): the placed piece of this very part the tap means, or null. T1 — the piece under the finger, for
+   * furniture-like cell pieces, when today's slot is no sensible place for another one (occupied, invalid, its floor
+   * hidden from the piece behind a wall, or — furniture and garden things — the cell right behind the piece, the floor
+   * the finger's ray meets after passing through it). T2 — today's slot itself holds this part (never one other than the
+   * piece the finger is on). Strokes, guides and pieces whose turn shows nothing never turn.
+   */
+  _sameTarget(def, p, pick, L, K0, cur0, dr) {
+    if (dr || !turnable(def)) return null;
+    const pe = pick?.entry, pickSame = !!pe && pe.def.id === def.id;
+    if (pickSame && pe.p.y === L && def.slot === 'cell' && def.layer !== 'R' && faceGroup(def) !== 'free') {
+      let sensible = false;
+      if (!cur0 && p.y === pe.p.y) {
+        const q0 = this.world.normalize({ ...p, r: 0 });
+        sensible = !!q0 && this.world.validate(q0).ok && clearPath(this._get, pe.p.x, pe.p.z, p.x, p.z, L);
+        // the finger is on the piece itself and the floor under it is the cell right behind it (hidden by it): the
+        // tap means that piece — furniture and garden things (a deck or porch steps still grow from a tap at their edge)
+        if (sensible && def.layer === 'I' && Math.max(Math.abs(p.x - pe.p.x), Math.abs(p.z - pe.p.z)) <= 1) sensible = false;
       }
-      return best < 0 ? 0 : best - base;
+      if (!sensible) return { key: pe.key, p: pe.p };
     }
-    const probes = kind === 'slope'
-      ? [[x - dx, z - dz]]
-      : [[x - dx - ex, z - dz - ez], [x - dx, z - dz], [x - ex, z - ez]];
-    let best = -1;
-    for (const [cx, cz] of probes) {
-      for (let hs = base; hs <= base + 12; hs++) {
-        const q = this.world.get(K.R(cx, hs, cz));
-        if (!q) continue;
-        const qd = getDef(q.t);
-        const qk = qd?.roof?.kind || 'slope';
-        if (qk === 'flat' || qk === 'cap') continue;
-        const sameDir = q.r === r;
-        if (kind === 'slope' && !sameDir) continue;
-        if (kind !== 'slope' && !(sameDir && (qk === kind))) {
-          // corners stacking diagonally need same kind & rotation; straight probes accept slopes
-          if (qk !== 'slope') continue;
-          if (!(q.r === r || q.r === ((r + 1) & 3))) continue;
-        }
-        const top = hs + (qd.roof?.rise ?? 1);
-        if (top > best) best = top;
-      }
+    if (cur0 && cur0.t === def.id && !(pickSame && pe.key !== K0)) return { key: K0, p: cur0 };
+    return null;
+  }
+
+  /** Would a placement here look like the placed record (material, colour, accent)? Then a tap turns it. */
+  _sameLook(def, p, cur) {
+    const m = this.materialFor(def), c = this.colorFor(def, m);
+    const q = this.world.normalize({ ...p, m, c, k: def.accent ? state.accent : undefined });
+    return !!q && (q.m || '') === (cur.m || '') && (q.c || '') === (cur.c || '') && (q.k || '') === (cur.k || '');
+  }
+
+  /** Is a placed record a finished piece of the blueprint being followed (guided mode)? Those are never turned. */
+  _guideBuilt(target) {
+    if (!state.blueprint || !this._gbp || this._gbp.id !== state.blueprint) return false;
+    return this._gbp.keys.get(target.key)?.t === target.p.t;
+  }
+
+  /** Show me (the town, §5.5): the recs it highlights, so the preview on a Show me spot has the wish's facing. */
+  setHints(recs) {
+    let map = null;
+    for (const rec of Array.isArray(recs) ? recs : []) {
+      const d = rec && getDef(rec.t);
+      if (!d || d.rot === 'none' || !Number.isFinite(rec.x) || !Number.isFinite(rec.z)) continue;
+      const k = d.layer === 'R' ? `R|${rec.x}|${rec.y | 0}|${rec.z}` : worldSlotKey(d, { ...rec, y: rec.y | 0, a: rec.a === 'z' ? 'z' : 'x' });
+      (map ||= new Map()).set(k, rec);
     }
-    return best < 0 ? 0 : best - base;
+    this._hints = map;
+    if (this.target && this.lastScreen && this.ghostVisible) this.hover(this.lastScreen.x, this.lastScreen.y);
+  }
+
+  _hintFor(def, p) {
+    if (!this._hints) return null;
+    return this._hints.get(def.layer === 'R' ? `R|${p.x}|${p.y}|${p.z}` : worldSlotKey(def, p)) || null;
+  }
+
+  /** Is the piece placed last still there as it was placed (nothing else changed since)? */
+  _lastLive() {
+    const lp = this.lastPlaced;
+    return !!lp && this.world.version === lp.v && this.world.get(lp.key) === lp.p;
+  }
+
+  /** Turn a placed piece to facing r: one undo step, a bounce and a sound; it becomes the piece just placed. */
+  _turnEntry(key, r, touch = this._touch, dir = 1) {
+    const res = this.world.update(key, { r });
+    if (!res) return null;
+    this.app.effects?.popIn?.(res.obj, 0.22);
+    events.emit('sfx', { name: 'rotate' });
+    if (touch) this._buzz(6);
+    this._pin = null;
+    this.lastPlaced = { key, p: res.p, v: this.world.version, placed: 0 };
+    if (state.rot !== (res.p.r | 0)) state.set({ rot: res.p.r | 0 });      // the facing the player last chose
+    events.emit('turned', { key, r: res.p.r, dir });
+    return res;
   }
 
   /** Auto-fit a gable piece to the roof panels resting on/over its edge. Returns { h, s, r }. */
@@ -1047,12 +1202,36 @@ export class Builder {
     this._touch = touch;
     switch (state.tool) {
       case 'build': {
+        this._guideTap = null;
         const t = this.resolve(sx, sy);
         if (!t) { if (touch) this.hideGhost(); return; }
         if (!t.valid) { this._fail(t.reason); if (touch) this.hideGhost(); return; }
+        if (t.action === 'turn') {
+          // tap again turns it — unless it was placed right there a moment ago (a double tap, not "turn it")
+          const lp = this.lastPlaced;
+          if (!(lp && lp.placed && lp.key === t.key && performance.now() - lp.placed < DOUBLE_TAP_MS && this._lastLive())) {
+            const res = this._turnEntry(t.key, t.p.r, touch);
+            if (res) this._turnRun = { key: t.key, r: res.p.r | 0, v: this.world.version };
+          }
+          this.hideGhost();
+          break;
+        }
+        const before = t.existing;
         const entry = this.place(t.p);
         this.hideGhost();
-        if (entry) this._afterPlace(t, touch, false);
+        if (entry && before && entry.p === before && t.facing?.source === 'blueprint') {
+          // a finished piece of the blueprint being followed, tapped with its part in hand: it stays as the blueprint
+          // has it (a tap never turns it) — say so, and Turn right after says the same (§5.5)
+          this._guideTap = { id: t.def.id, v: this.world.version };
+          this._say(TURN_GUIDE);
+          break;
+        }
+        if (entry) {
+          this._afterPlace(t, touch, false);
+          if (t.facing?.source === 'auto' && !t.facing.fallback && turnable(t.def)) {
+            this._tip('autoface', '✨ Pieces turn the right way by themselves — tap one again with the same piece to turn it.');
+          }
+        }
         break;
       }
       case 'erase': if (this.eraseAt(sx, sy) && touch) this._buzz(8); break;
@@ -1068,15 +1247,25 @@ export class Builder {
     this.hover(sx, sy);
   }
 
-  /** Press-and-hold: the preview follows the finger until it lifts. */
+  /** Press-and-hold: the preview follows the aim point until the finger lifts. The rig passes its aim point: the
+   *  finger at the start, then (touch, setting on) a point easing up above the finger (camera.js, §6), so hover,
+   *  aimEnd → tap, Erase / Paint / Pick and the town's Show me snap all act at the lifted point. */
   aimStart(sx, sy) {
     if (state.photoMode) return;
+    this._aimTurned = null;
     this.hover(sx, sy);
     this._buzz(5);
   }
 
   aimEnd(sx, sy, cancelled, e) {
+    const turned = this._aimTurned;
+    this._aimTurned = null;
     if (cancelled) { this.hideGhost(); return; }
+    // Turn pressed during this aim already turned the piece under it: lifting there adds no second turn
+    if (turned && state.tool === 'build') {
+      const t = this.resolve(sx, sy);
+      if (t && t.key === turned && (t.action === 'turn' || t.action === 'restyle')) { this.hideGhost(); return; }
+    }
     this.tap(sx, sy, e || { pointerType: 'touch' });
   }
 
@@ -1130,6 +1319,9 @@ export class Builder {
       this.app.effects.puff(entry.obj.position.clone().setY(entry.obj.position.y + 0.15), 0xf3ead8, 8);
     }
     if (!opts.silent) events.emit('sfx', { name: before ? 'replace' : 'place', flavor: entry.def.sound });
+    this._pin = null;
+    // a single placement (a tap, an aim, a click, the town's Show me snap) is the piece Turn / R turns next
+    if (!this.drawing) this.lastPlaced = { key: entry.key, p: entry.p, v: this.world.version, placed: performance.now() };
     events.emit('placed', { p: entry.p, def: entry.def, replaced: before || null });
     return entry;
   }
@@ -1206,11 +1398,13 @@ export class Builder {
     // before a hop and what was laid since (a hop that turns at once was a corner); turn: the last corner and what
     // was laid since (a hop soon after it moves the corner); roofLevel: a roof stroke's level; y: a garden
     // fence / hedge stroke's level
+    // face: a grid line's facing (fences, hedges, railings take their first segment's; Turn / R mid-stroke sets it)
     this.drawing = {
       seen: new Set(), axis: null, line: undefined, on: 0, seg: undefined, go: 0, corner: undefined,
       fresh: new Map(), last: null, drop: [], fill: [], count: 0, ops: 0, touch, roofLevel: undefined, y: undefined,
-      track: [], hopFrom: null, turn: null,
+      track: [], hopFrom: null, turn: null, face: new Map(),
     };
+    this.lastPlaced = null;
     // a wall-like stroke waits for the finger's first move: its direction picks the first edge's axis (not
     // whichever edge happens to be nearest where the finger landed — on a corner that's a coin toss)
     if (state.tool === 'build' && getDef(state.pieceId)?.slot === 'edge') { this.drawing.from = { x: sx, y: sy }; return; }
@@ -1297,6 +1491,11 @@ export class Builder {
     const before = this.world.get(t.key);
     const entry = this.place(t.p, { silent: d.count > 0 && d.count % 2 === 1 });
     if (!entry) return;
+    // the line's facing: fences, hedges and railings keep the one their first segment took; a pin seeds it (§5.4)
+    if (t.def.slot === 'edge' && t.def.rot !== 'none') {
+      const lk = this._lineKey(t.def, entry.p), g = faceGroup(t.def);
+      if (!d.face.has(lk) && (g === 'fence' || g === 'canon' || t.facing?.source === 'pin')) d.face.set(lk, entry.p.r | 0);
+    }
     if (!before) {
       d.fresh.set(t.key, entry.p);
       // the last new segment of the current row (a stub to take back if the stroke turns short of it)
@@ -1367,11 +1566,90 @@ export class Builder {
 
   // ---------------------------------------------------------------- commands for UI
 
+  /**
+   * Turn button / R (Shift+R the other way): "turn what you are looking at" (docs/SMART_BUILD.md §5.2). A stroke in
+   * progress: its current line. The preview over a placed piece of this part: that piece, now (one undo step). The
+   * preview over an empty slot: a pin (the preview turns; a placement there uses it). No preview: the piece just
+   * placed. Else a hint. Nothing sticks to a later placement but the fallback facing (state.rot).
+   */
   rotate(dir = 1) {
     const def = getDef(state.pieceId);
-    if (def?.rot === 'flip') state.set({ rot: state.rot >= 2 ? 0 : 2 });
-    else state.set({ rot: (state.rot + dir + 4) & 3 });
+    if (!def || !turnable(def) || state.photoMode) return;
+    const build = state.tool === 'build';
+    // 0. a draw stroke in progress: turn its current line
+    if (this.drawing && build) { this._turnStroke(def, dir); return; }
+    const t = this.target;
+    if (build && this.ghostVisible && t && t.def === def && !state.photoMode) {
+      if (t.guided) { this._say(TURN_GUIDE); return; }
+      if (t.action === 'turn' || t.action === 'restyle') {
+        // 1. the preview is over a placed piece of this part: turn that piece now, like a tap again
+        if (!t.valid) { this._fail(t.reason); return; }
+        const cur = this.world.get(t.key);
+        if (!cur) return;
+        if (this.rig?.mode === 'aim') this._aimTurned = t.key;
+        this._turnEntry(t.key, turnOf(def, cur.r, dir), this._touch, dir);
+        if (this.lastScreen) this.hover(this.lastScreen.x, this.lastScreen.y);
+        return;
+      }
+      // 2. the preview is over an empty (or replaceable) slot: pin that slot's facing — the preview turns
+      if (!['auto', 'pin', 'line'].includes(t.facing?.source)) { events.emit('sfx', { name: 'click' }); return; }
+      const r = turnOf(def, t.p.r, dir);
+      this._pin = { slotKey: t.slotKey, id: def.id, r };
+      events.emit('sfx', { name: 'rotate' });
+      if (state.rot !== r) state.set({ rot: r });
+      events.emit('turned', { pin: true, r, dir });
+      if (this.lastScreen) this.hover(this.lastScreen.x, this.lastScreen.y);
+      return;
+    }
+    // 3. no preview: the piece just placed turns (it is still there as placed, and it is this part)
+    const lp = this.lastPlaced;
+    if (build && this._lastLive() && lp.p.t === def.id) {
+      if (this._guideBuilt(lp)) { this._say(TURN_GUIDE); return; }
+      this._turnEntry(lp.key, turnOf(def, lp.p.r, dir), this._touch, dir);
+      return;
+    }
+    // 4. nothing to turn — the last tap was on a finished blueprint piece of this part (guided mode): it follows the blueprint
+    const gt = this._guideTap;
+    if (build && state.blueprint && gt && gt.id === def.id && gt.v === this.world.version) { this._say(TURN_GUIDE); return; }
+    this._say(TURN_HINT);
+  }
+
+  /** A short info toast with a click (Turn with nothing it can turn). */
+  _say(text) {
+    events.emit('sfx', { name: 'click' });
+    events.emit('toast', { text, kind: 'info', ms: 2200 });
+  }
+
+  /**
+   * Turn / R during a stroke: its current line (every segment of a stroke of cell pieces) takes the next facing; what
+   * the stroke laid fresh there turns too, inside the stroke's open batch (still one undo step), and later segments
+   * use it (§5.4).
+   */
+  _turnStroke(def, dir) {
+    const d = this.drawing;
+    const lk = def.slot === 'edge' && d.axis && d.line !== undefined ? `${d.axis}|${d.line}|${d.y ?? state.level}` : 'cell';
+    let cur = d.face.get(lk);
+    if (cur === undefined) cur = this.target?.def === def ? this.target.p.r : state.rot;
+    const r = turnOf(def, cur, dir);
+    d.face.set(lk, r);
+    for (const [key, q] of d.fresh) {
+      if (lk !== 'cell' && this._lineKey(def, q) !== lk) continue;
+      const e = this.world.entry(key);
+      if (!e || e.p !== q || e.def !== def) continue;
+      const res = this.world.update(key, { r });
+      if (res && res.p !== q) {
+        d.fresh.set(key, res.p);
+        if (d.last?.key === key) d.last = { ...d.last };
+        this.app.effects?.popIn?.(res.obj, 0.22);
+      }
+    }
     events.emit('sfx', { name: 'rotate' });
+    if (state.rot !== r) state.set({ rot: r });
+    events.emit('turned', { stroke: true, r, dir });
+    if (this.lastScreen) {
+      const t = this.resolve(this.lastScreen.x, this.lastScreen.y);
+      if (t) { this.target = t; this._showGhost(t); }
+    }
   }
 
   raise(d) {
@@ -1485,7 +1763,9 @@ export class Builder {
       // undoing right after a finger placement: maybe the tap landed in the wrong spot
       if (this._lastTouchPlace && performance.now() - this._lastTouchPlace < TOUCH_TIP_MS) {
         this._lastTouchPlace = 0;
-        this._tip('aim', '💡 Tip: press and hold to preview a piece — slide your finger to adjust, then lift to place.', 5600);
+        this._tip('aim', state.aimLift
+          ? '💡 Tip: press and hold — the preview lifts above your finger; slide to adjust, then lift to place.'
+          : '💡 Tip: press and hold to preview a piece — slide your finger to adjust, then lift to place.', 5600);
       }
       return true;
     }

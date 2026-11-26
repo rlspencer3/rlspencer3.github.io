@@ -2104,7 +2104,8 @@ raises it with the spec owner (§13.5) instead of editing.
     builder, R3 T3.5). A tap on the top of a ghost bench that would hit the house wall behind it still lands on the
     bench's spot.
   * Press-and-hold still builds: an aim that ends anywhere but on a highlight goes to the builder's `aimEnd`
-    unchanged, and draw strokes are never touched.
+    unchanged, and draw strokes are never touched. The rig hands `onAimEnd` its lifted aim point (the preview floats
+    above the finger, docs/SMART_BUILD.md §6), so a Show me ring under the lifted point snaps; no town change.
 * **hitTest(sx, sy, pad)** = `actors.hitTest(sx, sy, pad)` → `{ id, dist }`, then **occlusion**: when
   `app.builder.pickPiece(sx, sy)` hits a piece whose `point` is nearer the camera than `dist − 0.3`, the result is
   `null`. Indoor villagers are tappable only when visible. With the Build tool the pad is 12 px and a Show me spot

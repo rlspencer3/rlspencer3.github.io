@@ -460,12 +460,12 @@ await section('offline', async () => {
   const src = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
   const core = [...src.slice(src.indexOf('const CORE'), src.indexOf('];', src.indexOf('const CORE'))).matchAll(/'\.\/([^']+)'/g)].map((m) => m[1]);
   const town = fs.readdirSync(path.join(ROOT, 'js', 'town')).filter((f) => f.endsWith('.js')).map((f) => `js/town/${f}`);
-  const want = [...town, 'js/pieces/gifts.js', 'css/town.css'];
+  const want = [...town, 'js/pieces/gifts.js', 'css/town.css', 'js/facing.js'];
   const missing = want.filter((f) => !core.includes(f));
   const ghosts = core.filter((f) => !fs.existsSync(path.join(ROOT, f)));
   const version = Number((/const VERSION = (\d+)/.exec(src) || [])[1]);
-  check('R14', 'sw.js CORE lists every js/town file (14), js/pieces/gifts.js and css/town.css, and nothing that is not on disk; VERSION 5',
-    town.length === 14 && !missing.length && !ghosts.length && version === 5, { town: town.length, missing, ghosts, version });
+  check('R14', 'sw.js CORE lists every js/town file (14), js/pieces/gifts.js, css/town.css and js/facing.js, and nothing that is not on disk; VERSION ≥ 6 (bumped for js/facing.js)',
+    town.length === 14 && !missing.length && !ghosts.length && version >= 6, { town: town.length, missing, ghosts, version });
 });
 
 // ---------------------------------------------------------------- every blueprint boots with the town on

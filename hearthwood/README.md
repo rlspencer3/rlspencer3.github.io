@@ -30,7 +30,7 @@ Play it at **https://rlspencer3.github.io/hearthwood/** (or run it locally, see 
 | Gesture | What it does |
 |---|---|
 | Tap | Place the piece in hand on the glowing spot. With Erase, Paint or Pick, act on the piece you tap. A preview shows as soon as your finger lands. |
-| Press and hold (about half a second) | Aim: the preview follows your finger. Slide to adjust, lift to place. Lift over the buttons or off the edge of the screen to cancel. |
+| Press and hold (about half a second) | Aim: the preview glides up to just above your fingertip (a small ring marks the spot), so your finger never hides where the piece lands. Slide to adjust, lift to place it there — your finger may rest on the tray while the ring is still over the view. To cancel, slide until the ring goes under the buttons (the preview goes with it) or your finger is off the edge of the screen, then lift. Erase, Paint and Pick aim the same way. |
 | Drag one finger (Look) | Turn around whatever is in the middle of the screen. |
 | Drag one finger (Draw) | Place a row of pieces. With Erase or Paint, tidy away or paint everything you drag across. |
 | Pinch | Zoom in and out around the spot between your fingers. |
@@ -38,7 +38,10 @@ Play it at **https://rlspencer3.github.io/hearthwood/** (or run it locally, see 
 | Twist two fingers | Turn the view around the middle of the house under your fingers. |
 
 - A second finger put down just after you start a Draw stroke turns it into a pinch and takes the stroke back.
-- In Draw mode a held finger doesn't aim; it starts a stroke as soon as it moves.
+- In Draw mode a held finger doesn't aim; it starts a stroke right under it as soon as it moves.
+- Close under the top bar there is no room above your finger, so the aim leans toward the middle of the screen.
+- Prefer the preview right under your finger? Turn off **Preview above your finger** in Settings. A quick tap
+  always lands right where you tap.
 - Long-press a piece card (or tap its ⓘ) to read about it: where it goes, how many materials, whether it can be
   painted, which floors it fits. **Use this piece** picks it up.
 - Swipe the menu's header down to close it.
@@ -66,7 +69,7 @@ Play it at **https://rlspencer3.github.io/hearthwood/** (or run it locally, see 
 | B | Build |
 | E / P / I | Erase / Paint / Pick (press again to go back to Build) |
 | D | Switch between Look and Draw |
-| R, Shift + R | Turn (or flip) the piece in hand, the other way with Shift |
+| R, Shift + R | Turn what you point at: the placed piece under the preview at once, else the preview of an empty spot, else the piece you just placed (Shift: the other way) |
 | [ and ] | Lower / raise a roof piece by half a step |
 | + or = or Page Up | Up a floor |
 | − or _ or Page Down | Down a floor |
@@ -88,10 +91,10 @@ Keys do nothing while you are typing in a text box (the build name, a share code
 
 | Tool | How it works |
 |---|---|
-| **Build** | Places the piece in hand. A piece placed where another one is replaces it: tap a wall with a window and the window swaps in (windows and doors also swap walls on other floors you can see). The tray shows the piece's options: its material, its **Colour** (paintable materials only; *Natural* goes back to the plain look), an **Accent** colour for doors, frames and shutters, **Height** ▲▼ for roof pieces (*Auto*, or nudged up to 8 half-steps either way) and **Turn** (or **Flip** for pieces on grid lines). |
+| **Build** | Places the piece in hand, **facing the right way by itself** (see *Facing* below). A piece placed where another one is replaces it: tap a wall with a window and the window swaps in (windows and doors also swap walls on other floors you can see). Tap a placed piece again with the same piece in hand to **turn** it. The tray shows the piece's options: its material, its **Colour** (paintable materials only; *Natural* goes back to the plain look), an **Accent** colour for doors, frames and shutters, **Height** ▲▼ for roof pieces (*Auto*, or nudged up to 8 half-steps either way) and **Turn** (or **Flip** for pieces on grid lines; none for railings and gables, which have nothing to turn). |
 | **Erase** | Tap a piece to tidy it away. In Draw mode, drag across many. One stroke only clears one kind of thing on one floor, so wiping across a roof won't eat the walls underneath. |
 | **Paint** | Pick a material (the Walls / Roof / Floors / Trim buttons jump to each group), a colour (24 to choose from), or both, then tap pieces. *Keep* leaves that part as it is. **Main / Accent** switches to painting door, frame and shutter colours. A material a piece can't use is skipped, and colour only shows on paintable materials. A material you pick stays where you tapped it, the strip scrolls just enough to show it whole, and its group's button lights up. On very short portrait screens the hint row hides and **Done** sits beside Main / Accent. |
-| **Pick** | Tap a placed piece to copy it: the piece, its material, colours, accent and facing, and its floor (except for roof pieces). Then you're back to Build with it in hand. |
+| **Pick** | Tap a placed piece to copy it: the piece, its material, colours, accent and its floor (except for roof pieces). Then you're back to Build with it in hand. Its facing becomes the one used where nothing around a spot says which way to face (a tree in the open meadow); anywhere else the automatic facing wins. |
 
 **Look and Draw.** In Look mode (✋) one-finger drags turn the view. In Draw mode (✏️) they place a row of pieces
 instead; pinch, twist and two-finger drags still move the camera. A small *Draw* chip under the menu button reminds
@@ -105,6 +108,31 @@ new wall look (their accent colour stays). To turn one back into a wall, tap it 
 stamped blueprint, a loaded build or a new meadow, is one Undo step.
 
 **Mending a gap.** Tap the middle of a missing wall segment, between two walls, and the wall goes right into the gap.
+
+**Facing.** You never have to turn pieces by hand: each one faces the sensible way for its spot, worked out from what
+is around it, and the preview shows it before you place it. Walls, windows and doors face outward; roof slopes run
+down toward the nearest eave and carry on the row beside them (a lean-to slopes away from the wall it leans on);
+beds, sofas, bookshelves, desks, stoves and kitchens put their back to the nearest wall and face the room; chairs
+face the table beside them and armchairs the fire in front of them; stairs run along a wall up to the floor above;
+porch steps climb to the porch; deck boards run away from the house; fences show their good side to the path or
+the street; benches face a pond, a path or the house; mailboxes, woodpiles and other garden things face away from
+the house. Where nothing around says anything (a tree in the open meadow) a piece takes the facing you chose last.
+- **Tap it again to turn it.** Tap a piece you placed with the same piece in hand and it turns to the facing that
+  suits its spot best now — so after you add a nightstand beside a bed, a fireplace near an armchair or a table
+  beside a chair, one tap turns the bed, armchair or chair to match. If it already faces that way it turns to the
+  next most likely facing — stairs along a wall to climb the other way, a roof slope to the other side of the ridge,
+  a bed in a corner to the other wall — and keeps going round all four with more taps, each one Undo step (doors and
+  other pieces on grid lines flip; tables and pieces with nothing around to go by turn a quarter). With another
+  material or colour in hand the tap restyles it and keeps its facing. Furniture and garden things turn from a tap
+  anywhere on them; only a tap that goes past a piece's top to the floor two or more cells behind it places another
+  one there. A quick double tap that places a piece never turns it. In guided building a finished blueprint piece
+  never turns: a tap on it says it follows the blueprint.
+- **Turn** (R on a keyboard) turns a plain quarter (Shift + R the other way) whatever you are pointing at: the placed
+  piece under the preview at once, or the preview of an empty spot (a tap there then places it turned), or, with no
+  preview, the piece you just placed. On a phone that means: place it, then press Turn if it faced the wrong way.
+  Nothing stays turned for later pieces. During a Draw stroke, Turn turns the row being drawn.
+- Facing is only decided when you place a piece: blueprints, guided building, saves and share codes keep exactly the
+  facings they have, and guides and Show me spots always use their own.
 
 **The pieces counter** (🪵) counts everything you've placed.
 
@@ -132,8 +160,10 @@ see inside, unless you're holding a garden piece or a path. The rail's **All / C
 ## Roofs and gables
 
 - **Roofs:** pick a roof piece and tap the top of your walls. Panels settle on the walls under your finger whatever
-  floor is active (Floor 5's walls too) and stack up toward the ridge by themselves. Use **Turn** so the two sides
-  face each other, and **Height** ▲▼ to nudge a panel. Tapping low on a wall face, far from its top, gets a gentle
+  floor is active (Floor 5's walls too), slope down toward the nearest eave and stack up toward the ridge by
+  themselves, so the two sides of a gable roof face each other without any turning; corners and valleys fit the
+  rows they close. Tap a panel again with the same piece to turn it, or another roof piece (a Skylight) to swap it
+  in with that panel's facing. **Height** ▲▼ nudges a panel. Tapping low on a wall face, far from its top, gets a gentle
   *"Tap the top of a wall to rest the roof on it"* instead of a panel in the wrong place.
 - **Gables:** pick a **Gable Wall** or **Gable Window** and tap the open triangle at either end of the roof. It fits
   itself to the slope, gentle or steep. Over the top floor it takes the place of the wall below as one tall piece,
@@ -179,7 +209,7 @@ Each style has a blueprint you can stamp down and take apart to see how it's mad
 **A-frame cabin** (blueprint: *A-Frame Cabin*)
 - An A-frame is nearly all roof. Lay the foundation, then place **Steep Roof** panels before any walls (they rise a
   whole storey per cell). With no walls under them to rest on, roof pieces sit right on the floor you're building, so
-  the roof starts at the ground. Turn the two sides to face each other.
+  the roof starts at the ground. The two sides face each other by themselves.
 - Fill the ends with **Gable Wall** and **Gable Window** in **Glass Panels** for a glowing glass front. Use
   **A-Frame Glass** panels for light through the roof, and Cedar Shingle for the back.
 - Add a sleeping loft (Floor pieces on Floor 2 over the back, plus a Loft Ladder), a Wood Stove, a stone Chimney and
@@ -304,6 +334,7 @@ Menu → Settings. These are remembered between visits.
 | Sound effects | Building sounds plus the meadow's ambience: wind, birds by day, crickets and owls at night, rain, a crackle near a fireplace, stove or fire pit, frogs by the pond at night |
 | Music | A gentle generated kalimba and music-box tune over warm chords, slower and softer at night |
 | Soft shadows | On / off |
+| Preview above your finger | On (the default): press and hold lifts the preview just above your fingertip. Off: it stays under the finger. Only matters on a touch screen. |
 | Villagers & wishes | On (the default) or off for a quiet build-only meadow; nothing is lost |
 | Villager chatter | The villagers' little babble when you are near them, on or off |
 | Quality | Low (screen resolution, less scenery), Auto (picks for your device), High (sharpest). Antialiasing changes apply the next time the game loads. |
@@ -354,6 +385,7 @@ hearthwood/
   js/materials.js        materials, night glow, seasons   js/world.js     placed pieces, undo, load
   js/batcher.js          static batching                  js/camera.js    orbit camera + gestures
   js/builder.js          placement, tools, auto-roof      js/effects.js   pop-ins, dust, sparkles
+  js/facing.js           smart facing: which way a piece faces, from what is around its spot (docs/SMART_BUILD.md)
   js/storage.js          saves, slots, share codes        js/thumbs.js    piece card pictures
   js/pieces/             floors.js, walls.js, roof.js, decor.js, gifts.js (every piece, via registerPiece)
   js/town/               the Living Town: villagers, homes, nav, wishes, Cozy (index.js wires it in; see docs/LIVING.md)
@@ -363,8 +395,10 @@ hearthwood/
   js/blueprints.js       blueprints, guided building, the welcome lot
   js/vendor/             three.module.min.js + addons/BufferGeometryUtils.js (three.js r187)
   tools/                 shot.mjs (screenshots / tests), harness.mjs (shared test harness), batch-regress.mjs (batching
-                         regression), town-regress.mjs (village regression), town-brain.js / town-look.js / town-hud.js
+                         regression), town-regress.mjs (village regression), town-brain.js / town-look.js / town-hud.js,
+                         smart-regress.mjs + smart-scenes.js (smart facing and lifted preview regression)
   docs/LIVING.md         the Living Town design spec and its module contracts
+  docs/SMART_BUILD.md    the smart facing (and lifted preview) design spec
   docs/ARCHITECTURE.md   the contract between modules
 ```
 
@@ -419,6 +453,18 @@ gifts, guided mode, photo mode, persistence, two tabs, never evicted, never stuc
 minutes, depending on the machine, and exits 1 on any failure; `--only=showme,gifts` runs some sections, `--batch`
 adds both batch-regress runs. The per-package checks run as `shot.mjs` scripts: `--script tools/town-brain.js` (the brain),
 `tools/town-look.js` (the villagers' look) and `tools/town-hud.js` (bubbles and cards).
+
+`node tools/smart-regress.mjs` runs the smart-building regression (docs/SMART_BUILD.md §9) in about 8 minutes: the
+facing rules in 266 purpose-built scenes and over the five stock blueprints in four build orders (`tools/smart-scenes.js`),
+then real taps, Turn and R, Draw strokes, guided building, saves, Show me and the village's beds, chairs and ranges,
+the cost per call, and section H, the lifted press-and-hold preview with real touches on an iPhone 13 (portrait),
+an 844 × 390 landscape phone and a 320 × 568 phone (the lift, its ease and ring, the top bar, quick taps, the tray, a
+pinch, mouse, pen, Draw, Erase and the setting), and section R, the two repair rounds' findings with real touches
+(a stove on a window wall, also with a table or counter in front of it, the finger resting on the tray during an aim,
+a tap on top of a sofa in the open, tap again on stairs and a roof slope and after the room changed round a bed, an
+armchair and a chair, a finished blueprint piece in guided mode, porch steps in the meadow). `--only=A,H` runs
+some sections; it exits 1 on any failure. Run it
+after touching `facing.js`, the placement code in `builder.js` or the touch rig in `camera.js`.
 
 ### URL parameters
 

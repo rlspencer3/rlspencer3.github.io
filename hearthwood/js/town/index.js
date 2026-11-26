@@ -1014,6 +1014,7 @@ export async function init(app) {
     // 4. the highlight
     const hl = highlightOf(po);
     actors?.highlight?.(hl.h);
+    app.builder.setHints?.(hl.hits.map((e) => fullRec(e)));      // the builder's preview there: the wish's facing
     const v = tg.villager ? findV(tg.villager) : null;
     show = {
       target: tg, villager: tg.villager || null, home: tg.home || null, camp: !!tg.camp, tpl: v?.wish?.tpl || null, born: v?.wish?.born ?? null,
@@ -1072,6 +1073,7 @@ export async function init(app) {
     const hl = highlightOf(po);
     show.plan = po.plan; show.partIdx = po.partIdx; show.hits = hl.hits;
     actors?.highlight?.(hl.h);
+    app.builder.setHints?.(hl.hits.map((e) => fullRec(e)));
     const after = JSON.stringify([show.partIdx, show.hits.map((e) => [e.x, e.z, e.rec.t])]);
     if (after !== before || true) emitShow(true);
   }
@@ -1086,6 +1088,7 @@ export async function init(app) {
     if (!show) return;
     show = null;
     try { actors?.highlight?.(null); } catch { /* ignore */ }
+    try { app.builder.setHints?.(null); } catch { /* ignore */ }
     if (!quiet) emit('town-showme-end', { granted: !!granted });
   }
 

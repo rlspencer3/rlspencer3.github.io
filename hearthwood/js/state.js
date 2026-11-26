@@ -13,6 +13,7 @@ const defaults = {
   rot: 0,               // rotation for cell pieces (0..3); edge pieces use 0|2 (flip)
   hOffset: 0,           // manual roof height nudge in half steps (added to auto height)
   drawMode: false,      // false: one-finger drag orbits; true: one-finger drag paints pieces
+  aimLift: true,        // press and hold: the preview lifts above the finger (persisted; docs/SMART_BUILD.md §6.6)
   seeAll: true,         // show levels above the active one (stepping down a level turns this off = cutaway)
   // Remembered material / colours, keyed by def.matGroup (e.g. 'wall', 'roof')
   mats: {},
@@ -37,7 +38,7 @@ const defaults = {
   slot: 1,              // current save slot
 };
 
-const PERSIST = ['time', 'timeFlow', 'season', 'weather', 'sound', 'music', 'shadows', 'quality', 'mats', 'colors', 'accent', 'slot', 'village', 'chatter'];
+const PERSIST = ['time', 'timeFlow', 'season', 'weather', 'sound', 'music', 'shadows', 'quality', 'mats', 'colors', 'accent', 'slot', 'village', 'chatter', 'aimLift'];
 
 // Saved settings are checked before use: an old version, a hand-edited value or a NaN written by a bad
 // URL parameter must never reach the game (a null `mats` would break every placement).

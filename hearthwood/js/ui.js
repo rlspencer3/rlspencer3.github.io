@@ -8,6 +8,7 @@
 
 import { MAX_LEVEL } from './config.js';
 import { SLOT_COUNT } from './storage.js';
+import { turnable } from './facing.js';
 
 const LS_WELCOMED = 'hearthwood.welcomed';
 const LS_TRAY = 'hearthwood.ui.trayCollapsed';
@@ -632,7 +633,9 @@ export function init(app) {
     app.thumbnail?.(def.id, rec)?.then?.((url) => { if (url && img === curBadgeImg) { img.src = url; img.parentNode?.classList.add('has-img'); } }, () => {});
   }
 
-  let rotSpin = 0, rotLast = null, rotShown = null;
+  // the Turn icon spins a quarter turn (Flip: a half) per turn it makes — feedback, not a stored angle (facing is
+  // automatic: SMART_BUILD.md §5.2)
+  let rotSpin = 0, turnPtr = null, turnTapAt = -1e9;
   function colorKeyFor(def, m) { return m || def.id; }
   function paintableFor(def, m) { return !!(def.paintAlways || (def.paint && isPaintable(m))); }
 
@@ -725,18 +728,23 @@ export function init(app) {
         btn('hw-raise-btn', 'Raise roof piece', ico('up'), () => builder.raise(1), { sound: false, title: 'Raise (])' }));
       acts.append(labelled(g, 'Height'));
     }
-    if (def.rot && def.rot !== 'none') {
+    if (turnable(def)) {
+      // (railings and gables have nothing to turn: no button)
       const flip = def.rot === 'flip';
-      const deg = flip ? (state.rot >= 2 ? 180 : 0) : (state.rot & 3) * 90;
-      // cumulative spin so the icon turns the short way round with each tap
-      if (rotLast === null) rotSpin = deg;
-      else if (deg !== rotLast) rotSpin += ((((deg - rotLast) % 360) + 540) % 360) - 180 || 180;
-      rotLast = deg;
-      const from = rotShown;
-      rotShown = rotSpin;
-      const ic = h('span', { class: 'hw-rot-ic', style: { transform: `rotate(${from ?? rotSpin}deg)` }, html: svg(flip ? 'flip' : 'rotate') });
-      if (from !== null && from !== rotSpin) requestAnimationFrame(() => requestAnimationFrame(() => { ic.style.transform = `rotate(${rotSpin}deg)`; }));
-      const b = btn('hw-rbtn hw-rot', flip ? 'Flip' : 'Rotate', ic, () => builder.rotate(1), { sound: false, title: flip ? 'Flip (R)' : 'Rotate (R)' });
+      const ic = h('span', { class: 'hw-rot-ic', style: { transform: `rotate(${rotSpin}deg)` }, html: svg(flip ? 'flip' : 'rotate') });
+      const b = btn('hw-rbtn hw-rot', flip ? 'Flip' : 'Turn', ic, () => { if (performance.now() - turnTapAt > 700) builder.rotate(1); },
+        { sound: false, title: "Turn what you're pointing at, or the piece you just placed (R)" });
+      // a finger tapping Turn while another one aims (press and hold on the view) gets no click from the browser: the
+      // tap acts on its own pointerup (its click, if one follows, is then ignored)
+      b.addEventListener('pointerdown', (e) => { if (e.pointerType !== 'mouse') turnPtr = e.pointerId; });
+      b.addEventListener('pointerup', (e) => {
+        if (e.pointerId !== turnPtr) return;
+        turnPtr = null;
+        const r = b.getBoundingClientRect();
+        if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
+        turnTapAt = performance.now();
+        builder.rotate(1);
+      });
       acts.append(labelled(b, flip ? 'Flip' : 'Turn'));
     }
     if (acts.childNodes.length) ctx.append(acts);
@@ -1466,7 +1474,7 @@ export function init(app) {
   }
   function syncSettings(changed) {
     if (page !== 'settings') return;
-    for (const k of ['sound', 'music', 'shadows', 'timeFlow', 'village', 'chatter']) {
+    for (const k of ['sound', 'music', 'shadows', 'timeFlow', 'village', 'chatter', 'aimLift']) {
       if (!changed.includes(k) || !pageRefs[k]) continue;
       pageRefs[k].classList.toggle('is-on', !!state[k]);
       pageRefs[k].setAttribute('aria-checked', String(!!state[k]));
@@ -1520,6 +1528,10 @@ export function init(app) {
         toggle('music', 'Music', '🎵'),
         toggle('shadows', 'Soft shadows', '🌗'),
         h('div', { class: 'hw-set-row' }, h('span', { class: 'hw-set-ic' }, '✨'), h('span', { class: 'hw-set-lb' }, 'Quality'), seg(QUALITY, state.quality, (v) => state.set({ quality: v }), 'hw-seg-sm'))),
+      h('section', { class: 'hw-card-sec', 'data-sec': 'building' },
+        h('h3', null, 'Building'),
+        toggle('aimLift', 'Preview above your finger', '👆'),
+        h('p', { class: 'hw-set-note' }, 'Press and hold: the piece previews just above your fingertip, so your finger never hides where it lands.')),
       villageSection(),
       h('section', { class: 'hw-card-sec' },
         h('div', { class: 'hw-row' },
@@ -1531,7 +1543,7 @@ export function init(app) {
   function pageHelp() {
     const gestures = [
       ['👆', 'Tap', 'Place the selected piece on the glowing spot.'],
-      ['✋', 'Press & hold', 'Preview the piece under your finger — slide to adjust, lift to place. Lift over the tray to cancel.'],
+      ['✋', 'Press & hold', 'Preview the piece just above your finger (a small ring marks the spot) — slide to adjust, lift to place it there. To cancel, slide the ring down onto the tray and lift.'],
       ['☝️', 'Drag', 'Look around your home (in Look mode).'],
       ['🤏', 'Pinch', 'Zoom in close or out wide.'],
       ['✌️', 'Two-finger drag', 'Slide the view across the meadow.'],
@@ -1540,13 +1552,14 @@ export function init(app) {
     const tips = [
       ['✏️', 'Draw mode', 'Switch the rail from Look to Draw and one-finger drags place pieces in a row — perfect for long walls and fences. Pinch and twist still move the camera.'],
       ['🪟', 'Swap walls for windows', 'Pick a window or door and tap an existing wall — it swaps right in.'],
-      ['🏠', 'Roofs', 'Tap the top of your walls — roof slopes settle on them and stack toward the ridge by themselves. Use Turn so the two sides face each other, and Height ▲▼ to nudge.'],
+      ['↻', 'Facing', 'Pieces face the right way by themselves — beds against a wall, chairs to the table, doors outward. To turn one, tap it again with the same piece in hand (or press Turn).'],
+      ['🏠', 'Roofs', 'Tap the top of your walls — roof slopes settle on them, run down toward the eaves and stack toward the ridge by themselves. Height ▲▼ nudges.'],
       ['🔺', 'Gables', 'Pick a Gable Wall and tap the open triangle at either end of the roof — it fits itself to the slope.'],
       ['🪜', 'Upstairs', 'Use the Floor buttons at the top to build higher. Going down shows a cutaway.'],
       ['💧', 'Pick', 'Tap a placed piece to copy its piece, material and colours.'],
     ];
     const keys = [
-      ['R', 'Rotate / flip (Shift+R back)'], ['B', 'Build'], ['E', 'Erase'], ['P', 'Paint'], ['I', 'Pick'],
+      ['R', 'Turn what you point at (Shift+R back)'], ['B', 'Build'], ['E', 'Erase'], ['P', 'Paint'], ['I', 'Pick'],
       ['D', 'Draw / Look'], ['V', 'Show all floors'], ['+  −', 'Floor up / down'], ['[  ]', 'Roof height'],
       ['Q  ⇧W', 'Turn the view'], ['1–7', 'Categories'], ['Ctrl Z', 'Undo'], ['Ctrl ⇧Z', 'Redo'], ['M', 'Menu'], ['Esc', 'Cancel / close'],
     ];
@@ -1757,6 +1770,11 @@ export function init(app) {
     renderCards(true);
   });
   events.on('placed', (d) => { if (d?.def?.gift) setTimeout(markGifts, 0); });   // after the town marks it seen
+  events.on('turned', (d) => {
+    rotSpin += (curDef()?.rot === 'flip' ? 180 : 90) * (d?.dir < 0 ? -1 : 1);
+    const ic = ctx.querySelector('.hw-rot-ic');
+    if (ic) ic.style.transform = `rotate(${rotSpin}deg)`;
+  });
   events.on('blueprint-progress', (d) => {
     if (!d) return;
     const was = bp && bp.id === d.id ? bp.done : -1;

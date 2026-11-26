@@ -91,6 +91,7 @@ const world = new World(scene, {
 if (MOBILE) world.maxIdleTemplates = lowEnd ? 60 : 80;
 const rig = new CameraRig(camera, renderer.domElement);
 rig.drawMode = state.drawMode;
+rig.aimLift = state.aimLift && !state.photoMode;               // the builder keeps it in sync (docs/SMART_BUILD.md §6.6)
 const effects = new Effects(scene);
 world.batcher.effects = effects;                                 // tweening pieces stay unbatched
 world.onRemount = (from, to) => effects.retarget(from, to);      // a rebuilt piece keeps its pop-in
